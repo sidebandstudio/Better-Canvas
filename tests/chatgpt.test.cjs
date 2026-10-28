@@ -7,7 +7,7 @@ const { webcrypto } = require("node:crypto");
 const { root } = require("./audit-helpers.cjs");
 
 function loadModule() {
-  const context = vm.createContext({ console, URL, URLSearchParams, TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout, crypto: webcrypto });
+  const context = vm.createContext({ console, URL, URLSearchParams, TextEncoder, TextDecoder, atob, btoa, setTimeout, clearTimeout, AbortSignal, crypto: webcrypto });
   vm.runInContext(fs.readFileSync(path.join(root, "src/background/chatgpt.js"), "utf8"), context, { filename: "chatgpt.js" });
   return context.BCChatGPT;
 }
@@ -55,7 +55,8 @@ async function harness(opts = {}) {
     if (url === "https://auth.openai.com/jwks") return json(keys.jwks);
     if (url === "https://auth.openai.com/oauth/revoke") return new Response("", { status: world.revokeStatus });
     if (url === "https://auth.openai.com/api/accounts/oauth/token") {
-      if (world.hold) await world.hold;
+      // A held response still gives up when the request's time limit fires.
+      if (world.hold) await Promise.race([world.hold, new Promise((_, no) => init.signal && init.signal.addEventListener("abort", () => no(init.signal.reason)))]);
       if (form.grant_type === "refresh_token") {
         world.refreshCount++;
         if (world.refreshError) return json({ error: world.refreshError }, 400);
@@ -80,7 +81,7 @@ async function harness(opts = {}) {
       update: async () => ({}),
     },
   };
-  const service = M.create({ chrome, fetch, store, crypto: webcrypto, now: () => clock, wait: async () => {} });
+  const service = M.create({ chrome, fetch, store, crypto: webcrypto, now: () => clock, wait: async () => {}, requestMs: opts.requestMs || 15000 });
   // Lets the fake token endpoint sign with the nonce of the attempt in flight.
   async function connect(o) {
     const r = await service.connect(o);
@@ -429,6 +430,72 @@ test("Disconnect waits for a sign-in or refresh in flight, then revokes what it 
   assert.equal(revokes.at(-1).form.token, "refresh-2", "the rotated refresh token is the one revoked");
   assert.equal((await h.service.status()).connected, false, "a refresh that lands late can't sign back in");
   await assert.rejects(h.service.freshCred(), (e) => e.code === "signed_out");
+});
+
+test("Disconnect and a callback arriving together never leave a live sign-in behind", async () => {
+  // Disconnect first: the attempt is gone before the callback looks for it.
+  let h = await harness();
+  await h.connect();
+  let p = await h.store.get("pending");
+  let url = p.redirectUri + "?" + new URLSearchParams({ code: "c", state: p.state, client_id: "oaiapp_1" });
+  await Promise.all([h.service.disconnect(), h.service.onTabUpdated(7, { url }, { id: 7 })]);
+  assert.equal(tokenCalls(h).length, 0, "no code is spent after Disconnect");
+  assert.equal((await h.service.status()).connected, false);
+
+  // Callback first: Disconnect waits for it and revokes the new tokens.
+  h = await harness();
+  await h.connect();
+  p = await h.store.get("pending");
+  url = p.redirectUri + "?" + new URLSearchParams({ code: "c", state: p.state, client_id: "oaiapp_1" });
+  const r = await Promise.all([h.service.onTabUpdated(7, { url }, { id: 7 }), h.service.disconnect()]);
+  assert.equal(r[1].revoked, true);
+  assert.equal(h.calls.filter((c) => c.url.endsWith("/oauth/revoke")).length, 1);
+  assert.equal((await h.service.status()).connected, false);
+});
+
+test("a hung exchange times out and frees Disconnect, and a late one isn't kept", async () => {
+  let h = await harness({ requestMs: 30 });
+  await h.connect();
+  h.world.hold = new Promise(() => {});
+  await h.callback({ code: "c", client_id: "oaiapp_1" });
+  let s = await h.service.status();
+  assert.equal(s.lastError.code, "timeout");
+  assert.equal(s.pending, false);
+  assert.deepEqual(plain(await h.service.disconnect()), { ok: true, revoked: true }, "the turn is free again");
+
+  // Settings gave up on a stuck exchange; when its answer finally lands it's revoked, not saved.
+  h = await harness();
+  await h.connect();
+  const g = gate();
+  h.world.hold = g.p;
+  const late = h.callback({ code: "c", client_id: "oaiapp_1" });
+  await flush(); await flush();
+  h.tick(61 * 1000);
+  assert.equal((await h.service.status()).lastError.code, "interrupted");
+  h.world.hold = null; g.open();
+  await late;
+  s = await h.service.status();
+  assert.equal(s.connected, false);
+  assert.equal(s.lastError.code, "interrupted");
+  assert.equal(h.calls.find((c) => c.url.endsWith("/oauth/revoke")).form.token, "refresh-1");
+});
+
+test("two accounts with one email keep their labels when either signs in again", async () => {
+  const h = await harness();
+  await h.connect();
+  await h.callback({ code: "a", client_id: "oaiapp_A" });
+  await h.service.disconnect();
+  h.world.sub = "user-1-workspace-2";
+  await h.connect({ different: true });
+  await h.callback({ code: "b", client_id: "oaiapp_B" });
+  await h.service.disconnect();
+  const labels = async () => Object.fromEntries((await h.service.status()).accounts.map((a) => [a.clientId, a.label]));
+  const before = await labels();
+  assert.deepEqual(plain(before), { oaiapp_A: "student@example.edu", oaiapp_B: "student@example.edu (2)" });
+  h.world.sub = "user-1";
+  await h.connect({ clientId: "oaiapp_A" });
+  await h.callback({ code: "a2" });
+  assert.deepEqual(plain(await labels()), plain(before));
 });
 
 test("saved accounts can be picked again without registering a new client", async () => {

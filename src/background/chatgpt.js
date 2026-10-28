@@ -220,8 +220,17 @@
 
   // ---- the service --------------------------------------------------------
 
-  function create({ chrome, fetch, store, crypto, now = () => Date.now(), wait = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
-    const post = (url, form) => fetch(url, { method: "POST", body: new URLSearchParams(form), credentials: "omit", referrerPolicy: "no-referrer" });
+  function create({ chrome, fetch, store, crypto, now = () => Date.now(), wait = (ms) => new Promise((r) => setTimeout(r, ms)), requestMs = 15000 }) {
+    // Every sign-in request has a time limit, so a hung one can't hold the turn
+    // below and leave Disconnect waiting. Three of them fit inside FINISHING_MS.
+    async function timed(url, init) {
+      try { return await fetch(url, Object.assign({ signal: AbortSignal.timeout(requestMs) }, init)); }
+      catch (e) {
+        if (e && (e.name === "TimeoutError" || e.name === "AbortError")) throw fail("ChatGPT took too long to answer. Try again.", { code: "timeout", retry: true });
+        throw e;
+      }
+    }
+    const post = (url, form) => timed(url, { method: "POST", body: new URLSearchParams(form), credentials: "omit", referrerPolicy: "no-referrer" });
     const json = (r) => r.json().catch(() => null);
     let discovery = null, jwks = null, refreshing = null;
     const handling = new Set();
@@ -233,14 +242,14 @@
 
     async function getDiscovery() {
       if (discovery) return discovery;
-      const r = await fetch(DISCOVERY_URL, { credentials: "omit" });
+      const r = await timed(DISCOVERY_URL, { credentials: "omit" });
       if (!r.ok) throw fail("Couldn't reach ChatGPT sign-in. Try again.", { code: "discovery_" + r.status, retry: true });
       return (discovery = await r.json());
     }
     async function getJwks(kid) {
       if (jwks && jwks.keys.some((k) => k.kid === kid)) return jwks;
       const d = await getDiscovery();
-      const r = await fetch(d.jwks_uri, { credentials: "omit" });
+      const r = await timed(d.jwks_uri, { credentials: "omit" });
       if (!r.ok) throw fail("Couldn't load ChatGPT's signing keys. Try again.", { code: "jwks_" + r.status, retry: true });
       return (jwks = await r.json());
     }
@@ -255,6 +264,13 @@
       const list = (await registrations()).filter((r) => r.clientId !== reg.clientId);
       list.unshift(reg);
       await store.set("registrations", list);
+    }
+    // Stored once per registration, so two accounts with one email keep their labels
+    // when either signs in again and moves to the front of the list.
+    function labelFor(list, clientId, base) {
+      const taken = new Set(list.filter((r) => r.clientId !== clientId).map((r) => r.label || r.email));
+      if (!taken.has(base)) return base;
+      for (let n = 2; ; n++) if (!taken.has(base + " (" + n + ")")) return base + " (" + n + ")";
     }
     async function activeRegistration() {
       const id = await store.get("active");
@@ -279,7 +295,7 @@
         await setError(fail("Sign-in was interrupted. Try again.", { code: "interrupted" }));
         return null;
       }
-      if (now() - p.startedAt > PENDING_MS) { await store.del("pending"); return null; }
+      if (!p.finishing && now() - p.startedAt > PENDING_MS) { await store.del("pending"); return null; }
       return p;
     }
 
@@ -335,15 +351,21 @@
       handling.add(tabId);
       let pending = null;
       try {
-        const p = await pendingAttempt();
-        if (!p || p.tabId !== tabId || p.finishing || !isCallback(url, p)) return;
-        pending = p;
-        // Stays pending, marked used, until the exchange is done, so settings keep waiting.
-        await store.set("pending", Object.assign({}, p, { finishing: now() }));
-        chrome.tabs.remove(tabId).catch(() => {});
-        await exclusive(() => finish(p, url));
-        await setError(null);
-        await listModels().catch(() => {});
+        // The whole claim runs in Disconnect's turn. Either Disconnect goes first and
+        // this finds no attempt, or it goes after and revokes what this saved.
+        await exclusive(async () => {
+          const p = await pendingAttempt();
+          if (!p || p.tabId !== tabId || p.finishing || !isCallback(url, p)) return;
+          pending = p;
+          // Stays pending, marked used, until the exchange is done, so settings keep waiting.
+          await store.set("pending", Object.assign({}, p, { finishing: now() }));
+          chrome.tabs.remove(tabId).catch(() => {});
+          await finish(p, url);
+        });
+        if (pending) {
+          await setError(null);
+          await listModels().catch(() => {});
+        }
       } catch (e) {
         await setError(e);
       } finally {
@@ -381,8 +403,17 @@
       if (pending.sub && claims.sub !== pending.sub) {
         throw fail("You signed in with a different ChatGPT account. Use \"Use a different account\" to switch.", { code: "wrong_account" });
       }
+      // Settings gave up on this attempt (a stuck exchange timed out), so don't sign in behind their back.
+      const still = await store.get("pending");
+      if (!still || still.state !== pending.state) {
+        if (body.refresh_token) await revoke(body.refresh_token, clientId);
+        throw fail("Sign-in was interrupted. Try again.", { code: "interrupted" });
+      }
       const scopes = String(body.scope || "").split(/\s+/).filter(Boolean);
-      await saveRegistration({ clientId, sub: claims.sub, email: claims.email || "", addedAt: now() });
+      const list = await registrations();
+      const prev = list.find((r) => r.clientId === clientId);
+      await saveRegistration({ clientId, sub: claims.sub, email: claims.email || "", addedAt: (prev && prev.addedAt) || now(),
+        label: (prev && prev.label) || labelFor(list, clientId, claims.email || "ChatGPT account") });
       await store.set("cred:" + clientId, {
         clientId, sub: claims.sub, email: claims.email || "", idToken: body.id_token,
         accessToken: body.access_token, refreshToken: body.refresh_token || "", tokenType: body.token_type || "Bearer",
@@ -465,22 +496,25 @@
 
     // Revoke at OpenAI first, then forget the tokens. The registration and host ID
     // stay so the next sign-in reuses the same client.
+    // OpenAI answers an empty 200 even for a token that's already dead.
+    async function revoke(token, clientId) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const d = await getDiscovery();
+          const r = await post(d.revocation_endpoint, { token, token_type_hint: "refresh_token", client_id: clientId });
+          if (r.ok) return true;
+          if (r.status < 500) return false;
+        } catch (_) {}
+        if (attempt < 2) await wait(500 * (attempt + 1));
+      }
+      return false;
+    }
+
     const disconnect = () => exclusive(async () => {
       await cancel();
       const cred = await activeCred();
       if (!cred) return { ok: true, revoked: true };
-      let revoked = false;
-      if (cred.refreshToken) {
-        for (let attempt = 0; attempt < 3 && !revoked; attempt++) {
-          try {
-            const d = await getDiscovery();
-            const r = await post(d.revocation_endpoint, { token: cred.refreshToken, token_type_hint: "refresh_token", client_id: cred.clientId });
-            if (r.ok) revoked = true;
-            else if (r.status < 500) break;
-          } catch (_) {}
-          if (!revoked && attempt < 2) await wait(500 * (attempt + 1));
-        }
-      } else revoked = true;
+      const revoked = cred.refreshToken ? await revoke(cred.refreshToken, cred.clientId) : true;
       await store.del("cred:" + cred.clientId);
       await setPrefs({ models: [], welcomed: true });
       return { ok: true, revoked };
@@ -493,10 +527,8 @@
         chrome.permissions.contains({ origins: ORIGINS }), activeRegistration(), activeCred(), prefs(), store.get("lastError")]);
       const connected = !!(cred && cred.refreshToken);
       const planEnabled = connected && cred.scopes.includes(PLAN_SCOPE);
-      const saved = (await registrations()).filter((r) => r.sub);
-      // Email labels each account; the same email can belong to two workspaces.
-      const accounts = saved.map((r, i) => ({ clientId: r.clientId, active: !!reg && r.clientId === reg.clientId,
-        label: (r.email || "ChatGPT account") + (saved.some((x, j) => j < i && x.email === r.email) ? " (" + (i + 1) + ")" : "") }));
+      const accounts = (await registrations()).filter((r) => r.sub).map((r) => ({ clientId: r.clientId,
+        active: !!reg && r.clientId === reg.clientId, label: r.label || r.email || "ChatGPT account" }));
       return {
         ok: true, granted, pending: !!pending, finishing: !!(pending && pending.finishing), connected, planEnabled,
         email: (cred && cred.email) || (reg && reg.email) || "", accounts,
