@@ -53,10 +53,11 @@ const record = (extra) => Object.assign({ plan: { summary: "s", sessions: [], ca
 // ---- the dashboard half ----------------------------------------------------
 
 // A fake background that keeps plans, consent and claims the way coach.js does.
-function page({ connected = false, courses = [cs3500(), engw()], plans = {}, consent = {}, respond, takenByOtherTab, failNote, modules } = {}) {
+function page({ connected = false, courses = [cs3500(), engw()], plans = {}, consent = {}, respond, takenByOtherTab, failNote, modules,
+  reclaimed, existing = [], takenOver } = {}) {
   const { dom, context } = domContext('<div id="dash"><div id="DashboardCard_Container"></div></div>');
-  const sent = [], notes = [];
-  let clock = NOW;
+  const sent = [], notes = [], deleted = [];
+  let clock = NOW, seq = 0;
   const bg = { plans: plain(plans), consent: Object.assign({}, consent), ready: {} };
   const reply = async (msg) => {
     sent.push(msg);
@@ -65,18 +66,24 @@ function page({ connected = false, courses = [cs3500(), engw()], plans = {}, con
     if (msg.type === "bc:coach:plans") return { ok: true, plans: Object.fromEntries(msg.courseIds.map((id) => [id, { consented: !!bg.consent[id], record: bg.plans[id] || null, autoReadyAt: bg.ready[id] || 0 }])) };
     if (msg.type === "bc:coach:plan") {
       const r = respond ? await respond(msg) : { ok: false, error: "no" };
+      if (!r.ok) return r;
       bg.ready[msg.courseId] = clock + 20 * 3600e3;
-      if (r.ok) bg.plans[msg.courseId] = r.record;
+      bg.plans[msg.courseId] = r.record;
       return Object.assign({ autoReadyAt: bg.ready[msg.courseId] }, r);
     }
+    const mine = () => String(rec.added[msg.index] || "").split(":")[2] === String(msg.token);
     if (msg.type === "bc:coach:claim") {
-      if (takenByOtherTab === msg.index) rec.added[msg.index] = "claim:" + clock;
+      if (takenByOtherTab === msg.index) rec.added[msg.index] = "claim:" + clock + ":other";
       if (rec.added[msg.index]) return { ok: false, code: "taken", record: rec };
-      rec.added[msg.index] = "claim:" + clock;
-      return { ok: true, record: rec };
+      rec.added[msg.index] = "claim:" + clock + ":" + ++seq;
+      return { ok: true, token: String(seq), reclaimed: reclaimed === msg.index, record: rec };
     }
-    if (msg.type === "bc:coach:added") { rec.added[msg.index] = msg.noteId; return { ok: true, record: rec }; }
-    if (msg.type === "bc:coach:release") { delete rec.added[msg.index]; return { ok: true, record: rec }; }
+    if (msg.type === "bc:coach:added") {
+      if (takenOver === msg.index) { rec.added[msg.index] = "claim:" + clock + ":other"; return { ok: false, code: "taken", record: rec }; }
+      if (!mine()) return { ok: false, code: "taken", record: rec };
+      rec.added[msg.index] = msg.noteId; return { ok: true, record: rec };
+    }
+    if (msg.type === "bc:coach:release") { if (mine()) delete rec.added[msg.index]; return { ok: true, record: rec }; }
     return { ok: true };
   };
   context.chrome = { runtime: { lastError: undefined, sendMessage: (msg, cb) => setTimeout(() => reply(plain(msg)).then((r) => cb(plain(r)))) } };
@@ -103,6 +110,8 @@ function page({ connected = false, courses = [cs3500(), engw()], plans = {}, con
       if (failNote && failNote(notes.length)) throw new Error("Canvas 500");
       notes.push(n); return { id: String(900 + notes.length) };
     },
+    deletePlannerNote: async (id) => { deleted.push(id); },
+    getList: async (url) => { sent.push({ type: "GET " + url.split("?")[0] }); return existing; },
   };
   load(context, "src/content/features/coach.js");
   const apply = () => BC.features.coach.apply(settings, { page: "dashboard" });
@@ -110,7 +119,7 @@ function page({ connected = false, courses = [cs3500(), engw()], plans = {}, con
   const flush = async () => { for (let i = 0; i < 12; i++) { await new Promise((r) => setTimeout(r, 0)); await settle(); } };
   const button = (label) => [...shadow().querySelectorAll("button")].find((b) => b.textContent.trim() === label);
   const text = () => shadow().querySelector(".bc-root").textContent;
-  return { dom, context, BC, settings, local, sent, notes, bg, apply, shadow, flush, button, text, courses, setNow: (t) => { clock = t; } };
+  return { dom, context, BC, settings, local, sent, notes, deleted, bg, apply, shadow, flush, button, text, courses, setNow: (t) => { clock = t; } };
 }
 
 test("the needed score is the lowest one that reaches the target, by Grade Tools' own calculator", () => {
@@ -361,6 +370,47 @@ test("a session another tab claimed isn't added twice, and a failed note gives i
   } finally { p.dom.window.close(); }
 });
 
+test("taking over an abandoned claim reuses its note, and a note made after losing the claim is removed", async () => {
+  // The tab that held session 1 made its note, then went away.
+  let p = page({ connected: true, consent: { 1: true }, plans: twoSessions(), reclaimed: 1,
+    existing: [{ id: "800", title: "Redo HW 2", course_id: "1", todo_date: at(1, 19, 0) }] });
+  try {
+    p.settings.coach.autoUpdate = false;
+    p.BC.coach.trusted = () => true;
+    p.apply(); await p.flush();
+    p.button("Add to planner").click(); await p.flush();
+    assert.deepEqual(p.notes.map((n) => n.title), ["Read"], "session 1 wasn't made again");
+    assert.deepEqual(plain(p.bg.plans[1].added), { 1: "800", 2: "901" });
+  } finally { p.dom.window.close(); }
+  // Canvas was slow, this tab's claim lapsed, and another tab took session 1.
+  p = page({ connected: true, consent: { 1: true }, plans: twoSessions(), takenOver: 1 });
+  try {
+    p.settings.coach.autoUpdate = false;
+    p.BC.coach.trusted = () => true;
+    p.apply(); await p.flush();
+    p.button("Add to planner").click(); await p.flush();
+    assert.deepEqual(plain(p.deleted), ["901"], "its second copy is deleted");
+    assert.equal(p.bg.plans[1].added[2], "902");
+  } finally { p.dom.window.close(); }
+});
+
+test("a failure before the background's limits keeps its own wait through a resync", async () => {
+  const p = page({ connected: true, consent: { 1: true }, respond: () => ({ ok: false, code: "too_large", error: "This course has too much text to send." }) });
+  try {
+    p.apply(); await p.flush();
+    const asked = () => p.sent.filter((m) => m.type === "bc:coach:plan").length;
+    assert.equal(asked(), 1);
+    p.setNow(NOW + 5000);
+    p.context.document.dispatchEvent(new p.context.Event("visibilitychange"));
+    await p.flush();
+    assert.equal(asked(), 1, "no second try five seconds later");
+    p.setNow(NOW + 31 * 60000);
+    p.context.document.dispatchEvent(new p.context.Event("visibilitychange"));
+    await p.flush();
+    assert.equal(asked(), 2);
+  } finally { p.dom.window.close(); }
+});
+
 test("plans update on their own only for turned-on courses that need it", async () => {
   for (const [on, auto, expect] of [[true, true, 1], [false, true, 0], [true, false, 0]]) {
     const p = page({ connected: true, consent: Object.assign({ 2: true }, on ? { 1: true } : {}),
@@ -509,6 +559,30 @@ test("a plan that finishes after its course was turned off, or plans were delete
   }
 });
 
+test("a delete during the sign-in check, or turning a course off and on, still drops the answer", async () => {
+  // Plans deleted while the request waited on ChatGPT's status.
+  let open;
+  let b = await background({ status: undefined });
+  const status = b.chatgpt.status;
+  b.chatgpt.status = () => new Promise((resolve) => { open = () => resolve(status()); });
+  let pending = b.ask(b.planMsg());
+  await new Promise((r) => setTimeout(r, 10));
+  await b.ask({ type: "bc:coach:forget" }, PAGE);
+  open();
+  assert.equal((await pending).code, "not_opted_in");
+  assert.equal((await b.ask({ type: "bc:coach:plans", user: "77", courseIds: ["1"] })).plans["1"].record, null);
+  // Off and back on while ChatGPT was writing.
+  let release;
+  b = await background({ respond: () => new Promise((resolve) => { release = () => resolve({ text: JSON.stringify(plan()) }); }) });
+  pending = b.ask(b.planMsg());
+  await new Promise((r) => setTimeout(r, 10));
+  await b.ask({ type: "bc:coach:consent", origin: SCHOOL, user: "77", courseId: "1", on: false }, PAGE);
+  await b.ask({ type: "bc:coach:consent", origin: SCHOOL, user: "77", courseId: "1", name: "CS 3500", on: true }, PAGE);
+  release();
+  assert.equal((await pending).code, "not_opted_in");
+  assert.equal((await b.ask({ type: "bc:coach:plans", user: "77", courseIds: ["1"] })).plans["1"].record, null);
+});
+
 test("automatic rewrites wait a day per course, and manual ones a few seconds", async () => {
   const b = await background();
   const first = await b.ask(b.planMsg({ auto: true }));
@@ -570,13 +644,20 @@ test("each session goes to the planner once: claim, then record the note", async
   assert.equal((await send("bc:coach:added", { noteId: "901" })).ok, false, "no claim, no record");
   assert.equal((await send("bc:coach:claim", { createdAt: rec.createdAt - 1 })).ok, false, "a replaced plan");
   assert.equal((await send("bc:coach:claim", { index: 9 })).ok, false);
-  assert.equal((await send("bc:coach:claim")).ok, true);
+  const first = await send("bc:coach:claim");
+  assert.equal(first.ok, true);
+  assert.equal(first.reclaimed, false);
   assert.equal((await send("bc:coach:claim")).code, "taken", "a second tab");
-  assert.equal((await send("bc:coach:release")).ok, true);
-  assert.equal((await send("bc:coach:claim")).ok, true);
+  assert.equal((await send("bc:coach:release", { token: "nope" })).ok, false, "only the holder releases");
+  assert.equal((await send("bc:coach:release", { token: first.token })).ok, true);
+  const a = await send("bc:coach:claim");
   b.tick(121e3);
-  assert.equal((await send("bc:coach:claim")).ok, true, "a claim its tab abandoned lapses");
-  const r = await send("bc:coach:added", { noteId: "901" });
+  const bTab = await send("bc:coach:claim");
+  assert.equal(bTab.ok, true, "a claim its tab abandoned lapses");
+  assert.equal(bTab.reclaimed, true, "and the new holder is told to look for its note");
+  assert.equal((await send("bc:coach:release", { token: a.token })).ok, false, "the old holder can't release it");
+  assert.equal((await send("bc:coach:added", { token: a.token, noteId: "900" })).code, "taken", "or record over it");
+  const r = await send("bc:coach:added", { token: bTab.token, noteId: "901" });
   assert.equal(r.ok, true);
   assert.deepEqual(plain(r.record.added), { 0: "901" });
   assert.equal((await send("bc:coach:claim")).code, "taken");

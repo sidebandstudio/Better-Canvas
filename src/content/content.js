@@ -232,7 +232,7 @@
     }
     // The courses the study coach covers, with the student they belong to.
     if (msg.type === "bc:coachCourses") {
-      Promise.all([BC.api.self(), BC.api.coursesWithScores()]).then(([self, courses]) => sendResponse({ ok: true, user: String(self.id),
+      Promise.all([BC.api.self(), BC.api.coursesWithScores()]).then(([self, courses]) => sendResponse({ ok: true, origin: location.origin, user: String(self.id),
         courses: courses.filter((c) => !c.concluded).map((c) => ({ id: String(c.id), name: c.name || c.course_code || ("Course " + c.id) })) }))
         .catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;

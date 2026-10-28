@@ -73,6 +73,25 @@ test("options page offers to allow the address the toolbar icon sent, then reloa
   }
 });
 
+test("study coach courses carry the site the Canvas tab is on when it answers", async () => {
+  const s = await surface("options");
+  try {
+    const chrome = s.context.chrome;
+    let url = "https://a.instructure.com/courses";
+    chrome.permissions = Object.assign(chrome.permissions || {}, { getAll: async () => ({ origins: [] }) });
+    chrome.tabs.query = async () => [{ id: 5, url }];
+    chrome.tabs.get = async () => ({ id: 5, url });
+    chrome.tabs.sendMessage = (id, msg, cb) => cb(msg.type === "bc:ping" ? { canvas: true }
+      : { ok: true, origin: new URL(url).origin, user: "77", courses: [{ id: "1", name: "CS 3500" }] });
+    assert.equal((await s.adapter.getCoachCourses()).origin, "https://a.instructure.com");
+    // The remembered tab moved to another school's Canvas.
+    url = "https://b.instructure.com/courses";
+    assert.equal((await s.adapter.getCoachCourses()).origin, "https://b.instructure.com");
+    chrome.tabs.get = async () => ({ id: 5, url: "https://a.instructure.com/" });
+    await assert.rejects(s.adapter.getCoachCourses(), /moved/);
+  } finally { s.dom.window.close(); }
+});
+
 test("options adapters reject callback failures and promise rejections", async () => {
   const options = await surface("options");
   try {

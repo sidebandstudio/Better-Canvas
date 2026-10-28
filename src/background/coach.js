@@ -130,7 +130,7 @@
     // Consent, plans and counters share one record, so writes take turns.
     let turn = Promise.resolve();
     const exclusive = (fn) => { const r = turn.then(fn); turn = r.catch(() => {}); return r; };
-    const read = async () => Object.assign({ consent: {}, plans: {}, auto: {}, runs: {}, day: { ymd: "", count: 0 } }, (await store.get("coach")) || {});
+    const read = async () => Object.assign({ consent: {}, plans: {}, auto: {}, runs: {}, day: { ymd: "", count: 0 }, seq: 0 }, (await store.get("coach")) || {});
     const write = (data) => store.set("coach", data);
     const inflight = new Map();
     // Bumped by "Delete all plans", so a request already out doesn't save after it.
@@ -203,13 +203,16 @@
       if (!context || typeof context !== "object" || Array.isArray(context)) throw fail("Better Canvas couldn't read this course.", { code: "bad_request" });
       if (JSON.stringify(context).length > MAX_CONTEXT) throw fail("This course has too much text to send.", { code: "too_large" });
       const key = keyOf(origin, user, courseId);
-      if (!(await read()).consent[key]) throw notOn();
+      // Both fixed now, before anything waits: a delete, or turning the course off
+      // and on again, while this runs means its answer isn't kept.
+      const started = epoch;
+      const given = (await read()).consent[key];
+      if (!given) throw notOn();
       const s = await chatgpt.status();
       if (!s.connected || !s.planEnabled) throw fail("Connect ChatGPT in Better Canvas settings first.", { code: "signed_out" });
 
       if (inflight.has(key)) return inflight.get(key);
       const job = (async () => {
-        const started = epoch;
         const ready = await reserve(key, fingerprint, !!msg.auto);
         try {
           const span = context.plan || {};
@@ -232,7 +235,8 @@
           // Not if the student turned the course off or deleted plans meanwhile.
           await exclusive(async () => {
             const data = await read();
-            if (epoch !== started || !data.consent[key]) throw fail("Study plans for this course were turned off.", { code: "not_opted_in" });
+            const current = data.consent[key];
+            if (epoch !== started || !current || current.id !== given.id) throw fail("Study plans for this course were turned off.", { code: "not_opted_in" });
             data.plans[key] = record;
             await write(data);
           });
@@ -246,7 +250,10 @@
     // Adding a session to the planner takes three steps: claim it here, create the
     // Canvas note, then record the note. A claim stops a second tab from adding
     // the same session, and lapses after two minutes if its tab never finishes.
+    // Only the tab holding a claim, by its token, can record or release it.
     const CLAIM_MS = 120e3;
+    const claimAt = (v) => Number(String(v).split(":")[1]) || 0;
+    const owns = (v, token) => isClaim(v) && String(v).split(":")[2] === String(token);
     function session(origin, msg, fn) {
       const key = keyOf(origin, String(msg.user || ""), String(msg.courseId || ""));
       return exclusive(async () => {
@@ -255,24 +262,27 @@
         if (!rec || rec.createdAt !== msg.createdAt || !(Number.isInteger(index) && index >= 0 && index < rec.plan.sessions.length)) {
           return { ok: false, error: "That plan changed. Reload the dashboard." };
         }
-        const r = fn(rec, index, now());
+        const r = fn(rec, index, now(), data);
         if (r.ok) await write(data);
         return Object.assign(r, { record: rec });
       });
     }
-    const claim = (origin, msg) => session(origin, msg, (rec, i, t) => {
+    const claim = (origin, msg) => session(origin, msg, (rec, i, t, data) => {
       const v = rec.added[i];
-      if (v && !(isClaim(v) && t - Number(v.slice(6)) >= CLAIM_MS)) return { ok: false, code: "taken" };
-      rec.added[i] = "claim:" + t;
-      return { ok: true };
+      const abandoned = isClaim(v) && t - claimAt(v) >= CLAIM_MS;
+      if (v && !abandoned) return { ok: false, code: "taken" };
+      data.seq++;
+      rec.added[i] = "claim:" + t + ":" + data.seq;
+      // An abandoned claim's tab may have made the note before it went away.
+      return { ok: true, token: String(data.seq), reclaimed: abandoned };
     });
     const added = (origin, msg) => session(origin, msg, (rec, i) => {
-      if (!isId(msg.noteId) || !isClaim(rec.added[i])) return { ok: false, code: "taken" };
+      if (!isId(msg.noteId) || !owns(rec.added[i], msg.token)) return { ok: false, code: "taken" };
       rec.added[i] = String(msg.noteId);
       return { ok: true };
     });
     const release = (origin, msg) => session(origin, msg, (rec, i) => {
-      if (!isClaim(rec.added[i])) return { ok: false };
+      if (!owns(rec.added[i], msg.token)) return { ok: false };
       delete rec.added[i];
       return { ok: true };
     });
@@ -290,7 +300,7 @@
       const key = keyOf(origin, String(msg.user), String(msg.courseId));
       return exclusive(async () => {
         const data = await read();
-        if (msg.on) data.consent[key] = { name: String(msg.name || "").slice(0, 200), at: now() };
+        if (msg.on) { data.seq++; data.consent[key] = { name: String(msg.name || "").slice(0, 200), at: now(), id: data.seq }; }
         else { delete data.consent[key]; delete data.plans[key]; }
         await write(data);
         return { ok: true };

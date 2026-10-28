@@ -106,7 +106,11 @@
       if (!tab) throw new Error("no Canvas tab");
       const resp = await sendToTab(tab.id, { type: "bc:coachCourses" });
       if (!resp || !resp.ok) throw new Error("request failed");
-      return { origin: new URL(tab.url).origin, user: resp.user, courses: resp.courses };
+      // The tab found earlier may be on another Canvas site by now. The answer says
+      // which site it came from, and the tab has to still be there.
+      const current = await chrome.tabs.get(tab.id);
+      if (!current || new URL(current.url).origin !== resp.origin) throw new Error("the Canvas tab moved");
+      return { origin: resp.origin, user: resp.user, courses: resp.courses };
     },
   };
 

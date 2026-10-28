@@ -223,7 +223,8 @@
     ai: null,                // { connected, usageUrl } once the background answers
     plans: new Map(),        // course id -> stored record
     consent: new Map(),      // course id -> turned on in settings, per the background
-    autoReadyAt: new Map(),  // course id -> when the next automatic rewrite may go
+    autoReadyAt: new Map(),  // course id -> when the background allows the next automatic rewrite
+    retryAt: new Map(),      // course id -> when to try again after one failed here
     autoRunning: false,
     busy: new Set(),
     errors: new Map(),
@@ -324,7 +325,7 @@
         if (gen !== state.gen || !coachOn() || !state.ai || !state.ai.connected || !BC.storage.current.coach.autoUpdate) return;
         if (c.status !== "behind" && c.status !== "watch") continue;
         if (!optedIn(c.id) || state.busy.has(c.id)) continue;
-        if (!isStale(c, state.plans.get(c.id)) || Date.now() < (state.autoReadyAt.get(c.id) || 0)) continue;
+        if (!isStale(c, state.plans.get(c.id)) || Date.now() < Math.max(state.autoReadyAt.get(c.id) || 0, state.retryAt.get(c.id) || 0)) continue;
         await requestPlan(c, true);
       }
     } finally { state.autoRunning = false; }
@@ -344,14 +345,14 @@
       if (gen !== state.gen || !coachOn() || !optedIn(c.id)) return;
       const r = await send("bc:coach:plan", { user: state.user, courseId: c.id, fingerprint: c.fingerprint, context, links, auto: !!auto });
       if (r.autoReadyAt) state.autoReadyAt.set(c.id, r.autoReadyAt);
-      else if (auto) state.autoReadyAt.set(c.id, Date.now() + 30 * 60000);
+      else if (auto) state.retryAt.set(c.id, Date.now() + 30 * 60000);
       if (r.ok) state.plans.set(c.id, r.record);
       else {
         if (r.code === "not_opted_in") { state.consent.set(c.id, false); state.plans.delete(c.id); }
         if (!(auto && r.code === "auto_wait")) state.errors.set(c.id, r);
       }
     } catch (e) {
-      if (auto) state.autoReadyAt.set(c.id, Date.now() + 10 * 60000);
+      if (auto) state.retryAt.set(c.id, Date.now() + 10 * 60000);
       state.errors.set(c.id, { error: "Couldn't gather this course for ChatGPT. Try again." });
       BC.diag.push("coach:plan", e);
     } finally { state.busy.delete(c.id); render(); }
@@ -365,7 +366,15 @@
   const sessionStart = (x) => { const [y, m, d] = x.day.split("-").map(Number); const [h, mi] = x.start.split(":").map(Number); return new Date(y, m - 1, d, h, mi); };
   const upcomingSessions = (rec) => rec.plan.sessions.map((x, i) => ({ x, i })).filter(({ x }) => sessionStart(x).getTime() > Date.now());
   // A note id, or another tab's claim from the last two minutes.
-  const isAdded = (v) => !!v && (!String(v).startsWith("claim:") || Date.now() - Number(String(v).slice(6)) < 120e3);
+  const isAdded = (v) => !!v && (!String(v).startsWith("claim:") || Date.now() - Number(String(v).split(":")[1]) < 120e3);
+
+  // The note an abandoned claim may have made: same course, title and time.
+  async function findNote(courseId, title, when) {
+    const q = "?per_page=100&start_date=" + encodeURIComponent(BC.dt.startOfDay(when).toISOString()) +
+      "&end_date=" + encodeURIComponent(BC.dt.endOfDay(when).toISOString());
+    const notes = await BC.api.getList("/api/v1/planner_notes" + q, { maxPages: 2 });
+    return notes.find((n) => n.title === title && String(n.course_id) === courseId && Date.parse(n.todo_date) === when.getTime()) || null;
+  }
 
   // Each session becomes a Canvas planner note at its time, which also shows up in
   // Canvas's own planner and app, plus a block in the planner's day view.
@@ -384,22 +393,32 @@
         const claim = await send("bc:coach:claim", which(i));
         if (claim.record) { rec = claim.record; state.plans.set(c.id, rec); }
         if (!claim.ok) { if (claim.code === "taken") continue; throw new Error(claim.error || "The plan changed"); }
-        let note;
-        try {
-          note = await BC.api.createPlannerNote({
-            title: plain(x.task, rec.links).slice(0, 200), todoDate: sessionStart(x).toISOString(), courseId: c.id,
-            details: "Study session from Better Canvas's study coach" + (rec.focusName ? " for " + rec.focusName : "") + ".",
-          });
-          if (!note || note.id == null) throw new Error("Canvas didn't return the new planner item");
-        } catch (err) {
-          const back = await send("bc:coach:release", which(i));
-          if (back.record) { rec = back.record; state.plans.set(c.id, rec); }
-          throw err;
+        const mine = Object.assign(which(i), { token: claim.token });
+        const title = plain(x.task, rec.links).slice(0, 200), when = sessionStart(x);
+        let note = claim.reclaimed ? await findNote(c.id, title, when).catch(() => null) : null;
+        const made = !note;
+        if (!note) {
+          try {
+            note = await BC.api.createPlannerNote({
+              title, todoDate: when.toISOString(), courseId: c.id,
+              details: "Study session from Better Canvas's study coach" + (rec.focusName ? " for " + rec.focusName : "") + ".",
+            });
+            if (!note || note.id == null) throw new Error("Canvas didn't return the new planner item");
+          } catch (err) {
+            const back = await send("bc:coach:release", mine);
+            if (back.record) { rec = back.record; state.plans.set(c.id, rec); }
+            throw err;
+          }
         }
         // The note exists now. Record it before anything else can fail.
-        const r = await send("bc:coach:added", Object.assign(which(i), { noteId: String(note.id) }));
-        rec = r.record || Object.assign({}, rec, { added: Object.assign({}, rec.added, { [i]: String(note.id) }) });
-        state.plans.set(c.id, rec);
+        const r = await send("bc:coach:added", Object.assign(mine, { noteId: String(note.id) }));
+        if (r.record) { rec = r.record; state.plans.set(c.id, rec); }
+        if (!r.ok) {
+          // Canvas was slow, the claim lapsed and another tab took the session
+          // over, so this note would be a second copy.
+          if (made && r.code === "taken") await BC.api.deletePlannerNote(note.id).catch((err) => BC.diag.push("coach:planner", err));
+          continue;
+        }
         await BC.storage.updateLocal((d) => {
           const t = (d.todo = d.todo || {});
           (t.scheduled = t.scheduled || {})["planner_note:" + note.id] = { ymd: x.day, start: x.start, dur: x.minutes };
