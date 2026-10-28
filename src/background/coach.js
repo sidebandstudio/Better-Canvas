@@ -4,9 +4,10 @@
  * data here. This asks the student's ChatGPT plan for a study plan through
  * chatgpt.js, checks the answer against that data and keeps it.
  *
- * Only courses the student turned on in settings get through, and requests are
- * capped per day. Canvas pages can't message the background, but they can click
- * the dashboard's buttons, and the caps hold even if a click slips past the
+ * Only courses the student turned on, on Better Canvas's own settings page, get
+ * through, and requests are capped per day. Canvas pages can't message the
+ * background, but they can click and rewrite the dashboard's buttons, so consent
+ * never comes from there, and the caps hold even if a click slips past the
  * content script's checks.
  */
 (function () {
@@ -51,7 +52,7 @@
     "- Point to Canvas items by their id in double square brackets, for example [[a123]]. Use only ids that appear in the data. The app replaces each one with the item's name and a link, so don't write the name as well.",
     "- Never write a grade, percentage, score, point value or date in your text. The app shows those numbers from Canvas.",
     "- summary: one to three sentences on what to focus on and why.",
-    "- sessions: two to six study sessions. Each has day (YYYY-MM-DD) from plan.firstDay to plan.lastDay, start (HH:MM, 24-hour, from 07:00 to 22:00), minutes (30 to 120) and task. A task is one concrete action under 120 characters, like reviewing a module, redoing a weak assignment or doing practice problems. Use different days and put the hardest work first.",
+    "- sessions: two to six study sessions. Each has day (YYYY-MM-DD) from plan.firstDay to plan.lastDay, start (HH:MM, 24-hour, from 07:00 to 22:00), minutes (30 to 120) and task. When plan.endBy is set, every session must end before it; if none fit, return no sessions and say so in caveat. A task is one concrete action under 120 characters, like reviewing a module, redoing a weak assignment or doing practice problems. Use different days and put the hardest work first.",
     "- caveat: one sentence about anything important the data didn't show, or an empty string.",
     "",
     "Reply with only the JSON object.",
@@ -81,16 +82,16 @@
   }
 
   // Sessions must fall inside the window the request gave, at a sensible hour,
-  // and not already be over.
-  function cleanPlan(raw, { links, firstDay, lastDay, now }) {
+  // not already be over, and end before the deadline they're studying for.
+  function cleanPlan(raw, { links, firstDay, lastDay, deadline, now }) {
     const known = new Set(Object.keys(links));
-    const today = ymd(now), nowHM = pad(new Date(now).getHours()) + ":" + pad(new Date(now).getMinutes());
+    const startOf = (x) => { const [y, m, d] = x.day.split("-").map(Number); const [h, mi] = x.start.split(":").map(Number); return new Date(y, m - 1, d, h, mi).getTime(); };
     const sessions = (Array.isArray(raw && raw.sessions) ? raw.sessions : []).map((x) => ({
       day: String((x && x.day) || ""), start: hm(x && x.start), minutes: Math.round(Number(x && x.minutes)),
       task: cleanText(x && x.task, known, 240),
     })).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.day) && x.day >= firstDay && x.day <= lastDay &&
-      x.start >= "06:00" && x.start <= "23:00" && !(x.day === today && x.start <= nowHM) &&
-      x.minutes >= 15 && x.minutes <= 240 && x.task)
+      x.start >= "06:00" && x.start <= "23:00" && x.minutes >= 15 && x.minutes <= 240 && x.task &&
+      startOf(x) > now && !(deadline && startOf(x) + x.minutes * 60000 > deadline))
       .sort((a, b) => (a.day + a.start).localeCompare(b.day + b.start)).slice(0, MAX_SESSIONS);
     const plan = { summary: cleanText(raw && raw.summary, known, 700), sessions, caveat: cleanText(raw && raw.caveat, known, 300) };
     if (!plan.summary && !sessions.length) throw fail("ChatGPT sent an empty plan. Try again.", { code: "bad_plan" });
@@ -117,29 +118,26 @@
     return out;
   }
 
+  function canvasOrigin(value) {
+    try { const u = new URL(String(value)); return /^https?:$/.test(u.protocol) && u.origin === String(value) ? u.origin : null; } catch (_) { return null; }
+  }
+  const isId = (v) => /^\d{1,20}$/.test(String(v));
+  const isClaim = (v) => typeof v === "string" && v.startsWith("claim:");
+
   function create({ chatgpt, store, chrome, now = () => Date.now(), requestMs = REQUEST_MS,
     keepAlive = () => setInterval(() => { try { chrome.runtime.getPlatformInfo(() => void chrome.runtime.lastError); } catch (_) {} }, 20e3) }) {
     const extOrigin = chrome.runtime.getURL("");
-    // Plans and counters share one record, so writes take turns.
+    // Consent, plans and counters share one record, so writes take turns.
     let turn = Promise.resolve();
     const exclusive = (fn) => { const r = turn.then(fn); turn = r.catch(() => {}); return r; };
-    const read = async () => Object.assign({ plans: {}, auto: {}, runs: {}, day: { ymd: "", count: 0 } }, (await store.get("coach")) || {});
+    const read = async () => Object.assign({ consent: {}, plans: {}, auto: {}, runs: {}, day: { ymd: "", count: 0 } }, (await store.get("coach")) || {});
     const write = (data) => store.set("coach", data);
     const inflight = new Map();
+    // Bumped by "Delete all plans", so a request already out doesn't save after it.
+    let epoch = 0;
 
-    function settings() {
-      return new Promise((resolve) => {
-        try {
-          const p = chrome.storage.local.get("bcSettings", (v) => resolve((v && v.bcSettings) || {}));
-          if (p && p.then) p.then((v) => resolve((v && v.bcSettings) || {}), () => resolve({}));
-        } catch (_) { resolve({}); }
-      });
-    }
-    async function optedIn(courseId) {
-      const s = await settings();
-      return !!(s.coach && s.coach.courses && s.coach.courses[courseId] === true);
-    }
-
+    // Consent belongs to one course of one student on one Canvas site, and only
+    // Better Canvas's own settings page can give it.
     const keyOf = (origin, user, courseId) => origin + "|" + user + "|" + courseId;
     // A plan goes stale when its course changes or its last session is over.
     function stale(rec, fingerprint, t) {
@@ -148,13 +146,14 @@
       return rec.fingerprint !== fingerprint || last < ymd(t);
     }
     const autoReadyAt = (data, key) => (data.auto[key] || 0) + AUTO_GAP_MS;
+    const notOn = () => fail("Turn on study plans for this course in Study coach settings first.", { code: "not_opted_in" });
 
     async function plans(origin, user, courseIds) {
       const data = await read();
       const out = {};
       for (const id of courseIds) {
         const key = keyOf(origin, user, id);
-        out[id] = { record: data.plans[key] || null, autoReadyAt: autoReadyAt(data, key) };
+        out[id] = { consented: !!data.consent[key], record: data.plans[key] || null, autoReadyAt: autoReadyAt(data, key) };
       }
       return { ok: true, plans: out };
     }
@@ -164,10 +163,12 @@
     function reserve(key, fingerprint, auto) {
       return exclusive(async () => {
         const t = now(), data = await read();
+        if (!data.consent[key]) throw notOn();
         if (data.day.ymd !== ymd(t)) data.day = { ymd: ymd(t), count: 0 };
         if (auto) {
-          if (!stale(data.plans[key], fingerprint, t)) throw fail("This plan is up to date.", { code: "auto_wait" });
-          if (t < autoReadyAt(data, key)) throw fail("This plan updated recently.", { code: "auto_wait" });
+          const ready = autoReadyAt(data, key);
+          if (!stale(data.plans[key], fingerprint, t)) throw fail("This plan is up to date.", { code: "auto_wait", autoReadyAt: ready });
+          if (t < ready) throw fail("This plan updated recently.", { code: "auto_wait", autoReadyAt: ready });
         } else if (t - (data.runs[key] || 0) < MANUAL_GAP_MS) {
           throw fail("A plan for this course was just written. Wait a few seconds.", { code: "too_soon" });
         }
@@ -178,6 +179,7 @@
         data.runs[key] = t;
         if (auto) data.auto[key] = t;
         await write(data);
+        return autoReadyAt(data, key);
       });
     }
 
@@ -195,79 +197,132 @@
 
     async function makePlan(origin, msg) {
       const courseId = String(msg.courseId || ""), user = String(msg.user || "");
-      if (!/^\d{1,20}$/.test(courseId) || !/^\d{1,20}$/.test(user)) throw fail("Better Canvas couldn't tell which course this is.", { code: "bad_request" });
+      if (!isId(courseId) || !isId(user)) throw fail("Better Canvas couldn't tell which course this is.", { code: "bad_request" });
       const fingerprint = String(msg.fingerprint || "").slice(0, 64);
       const context = msg.context;
       if (!context || typeof context !== "object" || Array.isArray(context)) throw fail("Better Canvas couldn't read this course.", { code: "bad_request" });
       if (JSON.stringify(context).length > MAX_CONTEXT) throw fail("This course has too much text to send.", { code: "too_large" });
-      if (!(await optedIn(courseId))) throw fail("Turn on study plans for this course first.", { code: "not_opted_in" });
+      const key = keyOf(origin, user, courseId);
+      if (!(await read()).consent[key]) throw notOn();
       const s = await chatgpt.status();
       if (!s.connected || !s.planEnabled) throw fail("Connect ChatGPT in Better Canvas settings first.", { code: "signed_out" });
 
-      const key = keyOf(origin, user, courseId);
       if (inflight.has(key)) return inflight.get(key);
       const job = (async () => {
-        await reserve(key, fingerprint, !!msg.auto);
-        const span = context.plan || {};
-        const firstDay = /^\d{4}-\d{2}-\d{2}$/.test(span.firstDay) && span.firstDay >= ymd(now()) ? span.firstDay : ymd(now());
-        const lastDay = /^\d{4}-\d{2}-\d{2}$/.test(span.lastDay) && span.lastDay >= firstDay &&
-          span.lastDay <= ymd(now() + 30 * DAY_MS) ? span.lastDay : ymd(now() + 6 * DAY_MS);
-        const links = cleanLinks(msg.links, origin);
-        const timer = keepAlive();
-        let answer;
+        const started = epoch;
+        const ready = await reserve(key, fingerprint, !!msg.auto);
         try {
-          answer = await ask(context, AbortSignal.timeout(requestMs));
-        } catch (e) {
-          if (e && (e.name === "TimeoutError" || e.name === "AbortError")) throw fail("ChatGPT took too long to write the plan. Try again.", { code: "timeout" });
-          throw e;
-        } finally { clearInterval(timer); }
-        const { plan, links: used } = cleanPlan(parsePlan(answer.text), { links, firstDay, lastDay, now: now() });
-        const focus = context.focus && typeof context.focus.name === "string" ? context.focus.name.slice(0, 200) : "";
-        const record = { plan, links: used, fingerprint, createdAt: now(), focusName: focus, added: {} };
-        await exclusive(async () => { const data = await read(); data.plans[key] = record; await write(data); });
-        return { ok: true, record };
+          const span = context.plan || {};
+          const firstDay = /^\d{4}-\d{2}-\d{2}$/.test(span.firstDay) && span.firstDay >= ymd(now()) ? span.firstDay : ymd(now());
+          const lastDay = /^\d{4}-\d{2}-\d{2}$/.test(span.lastDay) && span.lastDay >= firstDay &&
+            span.lastDay <= ymd(now() + 30 * DAY_MS) ? span.lastDay : ymd(now() + 6 * DAY_MS);
+          const deadline = Date.parse(span.endBy) || 0;
+          const links = cleanLinks(msg.links, origin);
+          const timer = keepAlive();
+          let answer;
+          try {
+            answer = await ask(context, AbortSignal.timeout(requestMs));
+          } catch (e) {
+            if (e && (e.name === "TimeoutError" || e.name === "AbortError")) throw fail("ChatGPT took too long to write the plan. Try again.", { code: "timeout" });
+            throw e;
+          } finally { clearInterval(timer); }
+          const { plan, links: used } = cleanPlan(parsePlan(answer.text), { links, firstDay, lastDay, deadline, now: now() });
+          const focus = context.focus && typeof context.focus.name === "string" ? context.focus.name.slice(0, 200) : "";
+          const record = { plan, links: used, fingerprint, createdAt: now(), focusName: focus, added: {} };
+          // Not if the student turned the course off or deleted plans meanwhile.
+          await exclusive(async () => {
+            const data = await read();
+            if (epoch !== started || !data.consent[key]) throw fail("Study plans for this course were turned off.", { code: "not_opted_in" });
+            data.plans[key] = record;
+            await write(data);
+          });
+          return { ok: true, record, autoReadyAt: ready };
+        } catch (e) { throw Object.assign(e, { autoReadyAt: ready }); }
       })().finally(() => inflight.delete(key));
       inflight.set(key, job);
       return job;
     }
 
-    // Remembers which sessions went into the planner, so a second click can't
-    // add them twice. Ignored if a newer plan replaced this one.
-    function added(origin, msg) {
+    // Adding a session to the planner takes three steps: claim it here, create the
+    // Canvas note, then record the note. A claim stops a second tab from adding
+    // the same session, and lapses after two minutes if its tab never finishes.
+    const CLAIM_MS = 120e3;
+    function session(origin, msg, fn) {
       const key = keyOf(origin, String(msg.user || ""), String(msg.courseId || ""));
       return exclusive(async () => {
         const data = await read(), rec = data.plans[key];
         const index = Number(msg.index);
-        if (!rec || rec.createdAt !== msg.createdAt || !(index >= 0 && index < rec.plan.sessions.length) || !/^\d{1,20}$/.test(String(msg.noteId))) {
+        if (!rec || rec.createdAt !== msg.createdAt || !(Number.isInteger(index) && index >= 0 && index < rec.plan.sessions.length)) {
           return { ok: false, error: "That plan changed. Reload the dashboard." };
         }
-        rec.added[index] = String(msg.noteId);
-        await write(data);
-        return { ok: true, record: rec };
+        const r = fn(rec, index, now());
+        if (r.ok) await write(data);
+        return Object.assign(r, { record: rec });
       });
     }
+    const claim = (origin, msg) => session(origin, msg, (rec, i, t) => {
+      const v = rec.added[i];
+      if (v && !(isClaim(v) && t - Number(v.slice(6)) >= CLAIM_MS)) return { ok: false, code: "taken" };
+      rec.added[i] = "claim:" + t;
+      return { ok: true };
+    });
+    const added = (origin, msg) => session(origin, msg, (rec, i) => {
+      if (!isId(msg.noteId) || !isClaim(rec.added[i])) return { ok: false, code: "taken" };
+      rec.added[i] = String(msg.noteId);
+      return { ok: true };
+    });
+    const release = (origin, msg) => session(origin, msg, (rec, i) => {
+      if (!isClaim(rec.added[i])) return { ok: false };
+      delete rec.added[i];
+      return { ok: true };
+    });
 
-    function forget(courseId) {
+    function consents() {
+      return read().then((data) => ({ ok: true, consents: Object.entries(data.consent).map(([key, v]) => {
+        const [origin, user, courseId] = key.split("|");
+        return { origin, user, courseId, name: v.name || "", at: v.at || 0 };
+      }) }));
+    }
+    // Turning a course off deletes its plan too.
+    function setConsent(msg) {
+      const origin = canvasOrigin(msg.origin);
+      if (!origin || !isId(msg.user) || !isId(msg.courseId)) return Promise.resolve({ ok: false, error: "Better Canvas couldn't tell which course this is." });
+      const key = keyOf(origin, String(msg.user), String(msg.courseId));
       return exclusive(async () => {
         const data = await read();
-        for (const key of Object.keys(data.plans)) if (courseId == null || key.endsWith("|" + courseId)) delete data.plans[key];
+        if (msg.on) data.consent[key] = { name: String(msg.name || "").slice(0, 200), at: now() };
+        else { delete data.consent[key]; delete data.plans[key]; }
+        await write(data);
+        return { ok: true };
+      });
+    }
+    function forget() {
+      epoch++;
+      return exclusive(async () => {
+        const data = await read();
+        data.plans = {};
         await write(data);
         return { ok: true };
       });
     }
 
     // Canvas tabs get these. The content script checks for real clicks, and the
-    // background checks the opt-in and the limits.
+    // background checks consent and the limits.
     const tabRoutes = {
       "bc:coach:status": () => chatgpt.status().then((s) => ({ ok: true, connected: !!(s.connected && s.planEnabled), usageUrl: s.usageUrl })),
       "bc:coach:plans": (msg, origin) => plans(origin, String(msg.user || ""),
-        (Array.isArray(msg.courseIds) ? msg.courseIds : []).map(String).filter((id) => /^\d{1,20}$/.test(id)).slice(0, 30)),
+        (Array.isArray(msg.courseIds) ? msg.courseIds : []).map(String).filter(isId).slice(0, 30)),
       "bc:coach:plan": (msg, origin) => makePlan(origin, msg),
+      "bc:coach:claim": (msg, origin) => claim(origin, msg),
       "bc:coach:added": (msg, origin) => added(origin, msg),
+      "bc:coach:release": (msg, origin) => release(origin, msg),
     };
-    // Only Better Canvas's own settings page deletes plans.
+    // Only Better Canvas's own settings page gives or takes back consent, or
+    // deletes plans. A Canvas page can change what the dashboard shows, but not this.
     const pageRoutes = {
-      "bc:coach:forget": (msg) => forget(/^\d{1,20}$/.test(String(msg.courseId)) ? String(msg.courseId) : null),
+      "bc:coach:consents": () => consents(),
+      "bc:coach:consent": (msg) => setConsent(msg),
+      "bc:coach:forget": () => forget(),
     };
 
     function handleMessage(msg, sender, sendResponse) {
@@ -283,11 +338,11 @@
       if (!origin) { sendResponse({ ok: false, error: "Better Canvas didn't accept that request." }); return false; }
       const route = tabRoutes[type] || pageRoutes[type];
       Promise.resolve().then(() => route(msg, origin)).then(sendResponse, (e) => sendResponse({
-        ok: false, error: e.message, code: e.code || "", manageUsage: !!e.manageUsage, requestId: e.requestId || "" }));
+        ok: false, error: e.message, code: e.code || "", manageUsage: !!e.manageUsage, requestId: e.requestId || "", autoReadyAt: e.autoReadyAt || 0 }));
       return true;
     }
 
-    return { handleMessage, makePlan, plans, added, forget };
+    return { handleMessage, makePlan, plans, claim, added, release, consents, setConsent, forget };
   }
 
   const api = { create, cleanPlan, parsePlan, cleanLinks, INSTRUCTIONS, SCHEMA, DAILY_LIMIT, AUTO_GAP_MS };

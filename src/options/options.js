@@ -100,6 +100,14 @@
     updateLocal(mutator) { return BC.storage.updateLocal(mutator); },
     getCourses() { return fromTab("bc:getCourses"); },
     getGpaData() { return fromTab("bc:gpaData"); },
+    // Study coach consent is per Canvas site and student, so this says which.
+    async getCoachCourses() {
+      const tab = await findCanvasTab();
+      if (!tab) throw new Error("no Canvas tab");
+      const resp = await sendToTab(tab.id, { type: "bc:coachCourses" });
+      if (!resp || !resp.ok) throw new Error("request failed");
+      return { origin: new URL(tab.url).origin, user: resp.user, courses: resp.courses };
+    },
   };
 
   BC.storage.load().then((settings) => {

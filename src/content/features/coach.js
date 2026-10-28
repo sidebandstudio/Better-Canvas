@@ -7,8 +7,10 @@
  * for a study plan (src/background/coach.js). ChatGPT never sees a course the
  * student didn't turn on, and none of the numbers shown come from it.
  *
- * A Canvas page shares this DOM and can click these buttons, so every action
- * checks event.isTrusted, which a page script can't fake.
+ * A Canvas page shares this DOM. It can click these buttons, so every action
+ * checks event.isTrusted, which a page script can't fake. It can also rewrite
+ * what they say, so turning a course on happens on Better Canvas's own settings
+ * page, never here.
  */
 (function () {
   "use strict";
@@ -57,8 +59,14 @@
     return { best, worst, needed };
   }
 
+  // Canvas keeps group weights after a course turns weighting off, and Grade
+  // Tools' calculator weighs any group that has one. Drop them when Canvas does.
+  const asCanvas = (course, groups) => course.apply_assignment_group_weights === false
+    ? groups.map((g) => Object.assign({}, g, { group_weight: 0 })) : groups;
+
   // Everything the panel says about one course. `now` is a timestamp.
   function analyze({ course, groups, goal, defaultGoal, scale, now }) {
+    groups = asCanvas(course, groups);
     const enr = (course.enrollments || [])[0] || {};
     const raw = enr.computed_current_score != null ? enr.computed_current_score : enr.computed_final_score;
     const canvas = raw == null ? null : Number(raw);
@@ -172,7 +180,7 @@
     const context = {
       today: BC.dt.ymd(now),
       weekday: new Date(now).toLocaleDateString("en-US", { weekday: "long" }),
-      plan: { firstDay, lastDay },
+      plan: { firstDay, lastDay, endBy: c.focus ? c.focus.dueAt : null },
       course: { name: c.name, code: c.code },
       grade: { current: c.score == null ? null : pct1(c.score), letter: c.letter, target: c.target, targetLetter: c.targetLetter, studentSetTarget: c.hasGoal },
       focus: c.focus ? {
@@ -214,11 +222,13 @@
     courses: [],             // ranked analyses
     ai: null,                // { connected, usageUrl } once the background answers
     plans: new Map(),        // course id -> stored record
-    autoReadyAt: new Map(),
+    consent: new Map(),      // course id -> turned on in settings, per the background
+    autoReadyAt: new Map(),  // course id -> when the next automatic rewrite may go
+    autoRunning: false,
     busy: new Set(),
     errors: new Map(),
     adding: new Set(),
-    autoTried: new Set(),
+    syncedAt: 0,
     sig: "",
   };
 
@@ -248,14 +258,16 @@
     state.user = self && self.id != null ? String(self.id) : "";
     const hidden = (s.dashboard && s.dashboard.courses) || {};
     const active = list.filter((c) => !c.concluded && !(hidden[c.id] && hidden[c.id].hidden)).slice(0, MAX_COURSES);
-    const loaded = await Promise.all(active.map((course) => BC.api.assignmentGroups(course.id).then((groups) => ({ course, groups }), () => null)));
+    const loaded = await Promise.all(active.map((course) => BC.api.assignmentGroups(course.id).then((groups) => ({ course, groups: asCanvas(course, groups) }), () => null)));
     if (active.length && !loaded.some(Boolean)) throw new Error("Couldn't load any course's grades");
     state.raw = loaded.filter(Boolean);
   }
 
   function ensureLoaded(s) {
     BC.lifecycle.pageBag("coach").once("visible", () => BC.lifecycle.pageBag("coach").listen(document, "visibilitychange", () => {
-      if (!document.hidden && BC.requestApply) BC.requestApply();
+      if (document.hidden) return;
+      if (BC.requestApply) BC.requestApply();
+      if (state.load === "done" && Date.now() - state.syncedAt > 2000) syncPlans(state.gen);
     }));
     if (state.load === "loading" || Date.now() < state.next || document.hidden) return;
     const gen = state.gen;
@@ -279,6 +291,7 @@
   }
 
   async function syncPlans(gen) {
+    state.syncedAt = Date.now();
     const status = await send("bc:coach:status");
     if (gen !== state.gen) return;
     state.ai = { connected: !!(status.ok && status.connected), usageUrl: status.usageUrl || "https://chatgpt.com/settings/usage" };
@@ -287,6 +300,7 @@
       if (gen !== state.gen) return;
       if (r.ok) for (const [id, p] of Object.entries(r.plans || {})) {
         if (p.record) state.plans.set(id, p.record); else state.plans.delete(id);
+        state.consent.set(id, !!p.consented);
         state.autoReadyAt.set(id, p.autoReadyAt || 0);
       }
     }
@@ -294,80 +308,64 @@
     autoUpdate(gen);
   }
 
-  const optedIn = (id) => !!((BC.storage.current.coach || {}).courses || {})[id];
+  const optedIn = (id) => state.consent.get(id) === true;
+  const coachOn = () => { const s = BC.storage.current; return !!(s && s.enabled !== false && s.dashboard && s.dashboard.enabled && s.coach && s.coach.enabled); };
   const lastDay = (rec) => rec.plan.sessions.length ? rec.plan.sessions[rec.plan.sessions.length - 1].day : BC.dt.ymd(rec.createdAt);
   const isStale = (c, rec) => !rec || rec.fingerprint !== c.fingerprint || lastDay(rec) < BC.dt.ymd(Date.now());
 
   // Rewrites plans for turned-on courses that need attention, one at a time, when
-  // their grades or due dates changed. The background allows one a day per course.
+  // their grades or due dates changed. The background allows one a day per course
+  // and says when the next may go, so a dashboard left open keeps checking.
   async function autoUpdate(gen) {
-    const s = BC.storage.current;
-    if (!state.ai || !state.ai.connected || !s.coach.autoUpdate) return;
-    for (const c of state.courses) {
-      if (gen !== state.gen) return;
-      if (c.status !== "behind" && c.status !== "watch") continue;
-      if (!optedIn(c.id) || state.autoTried.has(c.id) || state.busy.has(c.id)) continue;
-      if (!isStale(c, state.plans.get(c.id)) || Date.now() < (state.autoReadyAt.get(c.id) || 0)) continue;
-      state.autoTried.add(c.id);
-      await requestPlan(c, true);
-    }
+    if (state.autoRunning) return;
+    state.autoRunning = true;
+    try {
+      for (const c of state.courses) {
+        if (gen !== state.gen || !coachOn() || !state.ai || !state.ai.connected || !BC.storage.current.coach.autoUpdate) return;
+        if (c.status !== "behind" && c.status !== "watch") continue;
+        if (!optedIn(c.id) || state.busy.has(c.id)) continue;
+        if (!isStale(c, state.plans.get(c.id)) || Date.now() < (state.autoReadyAt.get(c.id) || 0)) continue;
+        await requestPlan(c, true);
+      }
+    } finally { state.autoRunning = false; }
   }
 
   async function requestPlan(c, auto) {
     if (state.busy.has(c.id) || !state.user) return;
     const raw = state.raw.find((r) => String(r.course.id) === c.id);
     if (!raw) return;
+    const gen = state.gen;
     state.busy.add(c.id); state.errors.delete(c.id);
     render();
     try {
       const { context, links } = await buildContext(c, raw.course, raw.groups);
+      // Gathering takes a moment. The coach may have been turned off, or the
+      // student may have left the dashboard, in the meantime.
+      if (gen !== state.gen || !coachOn() || !optedIn(c.id)) return;
       const r = await send("bc:coach:plan", { user: state.user, courseId: c.id, fingerprint: c.fingerprint, context, links, auto: !!auto });
-      if (r.ok) { state.plans.set(c.id, r.record); state.autoReadyAt.set(c.id, Date.now() + 20 * 3600e3); }
-      else if (!(auto && r.code === "auto_wait")) state.errors.set(c.id, r);
+      if (r.autoReadyAt) state.autoReadyAt.set(c.id, r.autoReadyAt);
+      else if (auto) state.autoReadyAt.set(c.id, Date.now() + 30 * 60000);
+      if (r.ok) state.plans.set(c.id, r.record);
+      else {
+        if (r.code === "not_opted_in") { state.consent.set(c.id, false); state.plans.delete(c.id); }
+        if (!(auto && r.code === "auto_wait")) state.errors.set(c.id, r);
+      }
     } catch (e) {
+      if (auto) state.autoReadyAt.set(c.id, Date.now() + 10 * 60000);
       state.errors.set(c.id, { error: "Couldn't gather this course for ChatGPT. Try again." });
       BC.diag.push("coach:plan", e);
     } finally { state.busy.delete(c.id); render(); }
   }
 
-  // The first plan for a course asks before anything leaves the browser.
-  function confirmCourse(c) {
-    return new Promise((resolve) => {
-      let dlg = null, ok = false;
-      const cancel = BC.ui.button("Cancel", { variant: "ghost", size: "sm", onClick: () => dlg.close() });
-      const go = BC.ui.button("Send and make a plan", { variant: "primary", size: "sm", onClick: (e) => {
-        if (!trusted(e)) return;
-        ok = true; dlg.close();
-      } });
-      dlg = BC.ui.dialog({
-        title: "Send " + c.name + " to ChatGPT?",
-        body: [
-          el("p", { text: "To write a study plan, Better Canvas sends this course's data to OpenAI through your ChatGPT plan:" }),
-          el("ul", null, [
-            el("li", { text: "Your scores on graded work, by assignment group" }),
-            el("li", { text: "Names and due dates of upcoming and missing work, and the instructions for the next big one" }),
-            el("li", { text: "Module and item titles, the syllabus and the last 5 announcements" }),
-          ]),
-          el("p", { text: "It never sends your name, quiz questions, your answers or other courses. You can turn this off in Study coach settings." }),
-        ],
-        actions: [cancel, go],
-        onClose: () => resolve(ok),
-      });
-      dlg.open();
-    });
-  }
-
-  async function makePlan(c, e) {
-    if (!trusted(e)) return;
-    if (!optedIn(c.id)) {
-      if (!(await confirmCourse(c))) return;
-      await BC.storage.update((d) => { d.coach.courses[c.id] = true; });
-    }
+  function makePlan(c, e) {
+    if (!trusted(e) || !optedIn(c.id)) return;
     requestPlan(c, false);
   }
 
   const sessionStart = (x) => { const [y, m, d] = x.day.split("-").map(Number); const [h, mi] = x.start.split(":").map(Number); return new Date(y, m - 1, d, h, mi); };
   const upcomingSessions = (rec) => rec.plan.sessions.map((x, i) => ({ x, i })).filter(({ x }) => sessionStart(x).getTime() > Date.now());
+  // A note id, or another tab's claim from the last two minutes.
+  const isAdded = (v) => !!v && (!String(v).startsWith("claim:") || Date.now() - Number(String(v).slice(6)) < 120e3);
 
   // Each session becomes a Canvas planner note at its time, which also shows up in
   // Canvas's own planner and app, plus a block in the planner's day view.
@@ -377,25 +375,39 @@
     if (!rec) return;
     state.adding.add(c.id); state.errors.delete(c.id);
     render();
+    const which = (i) => ({ user: state.user, courseId: c.id, createdAt: rec.createdAt, index: i });
     try {
       for (const { x, i } of upcomingSessions(rec)) {
-        if (rec.added[i]) continue;
-        const note = await BC.api.createPlannerNote({
-          title: plain(x.task, rec.links).slice(0, 200), todoDate: sessionStart(x).toISOString(), courseId: c.id,
-          details: "Study session from Better Canvas's study coach" + (rec.focusName ? " for " + rec.focusName : "") + ".",
-        });
-        if (!note || note.id == null) throw new Error("Canvas didn't return the new planner item");
+        if (isAdded(rec.added[i])) continue;
+        // The background hands each session to one tab, so two open dashboards
+        // can't both add it.
+        const claim = await send("bc:coach:claim", which(i));
+        if (claim.record) { rec = claim.record; state.plans.set(c.id, rec); }
+        if (!claim.ok) { if (claim.code === "taken") continue; throw new Error(claim.error || "The plan changed"); }
+        let note;
+        try {
+          note = await BC.api.createPlannerNote({
+            title: plain(x.task, rec.links).slice(0, 200), todoDate: sessionStart(x).toISOString(), courseId: c.id,
+            details: "Study session from Better Canvas's study coach" + (rec.focusName ? " for " + rec.focusName : "") + ".",
+          });
+          if (!note || note.id == null) throw new Error("Canvas didn't return the new planner item");
+        } catch (err) {
+          const back = await send("bc:coach:release", which(i));
+          if (back.record) { rec = back.record; state.plans.set(c.id, rec); }
+          throw err;
+        }
+        // The note exists now. Record it before anything else can fail.
+        const r = await send("bc:coach:added", Object.assign(which(i), { noteId: String(note.id) }));
+        rec = r.record || Object.assign({}, rec, { added: Object.assign({}, rec.added, { [i]: String(note.id) }) });
+        state.plans.set(c.id, rec);
         await BC.storage.updateLocal((d) => {
           const t = (d.todo = d.todo || {});
           (t.scheduled = t.scheduled || {})["planner_note:" + note.id] = { ymd: x.day, start: x.start, dur: x.minutes };
-        });
-        const r = await send("bc:coach:added", { user: state.user, courseId: c.id, createdAt: rec.createdAt, index: i, noteId: String(note.id) });
-        rec = r.ok ? r.record : Object.assign({}, rec, { added: Object.assign({}, rec.added, { [i]: String(note.id) }) });
-        state.plans.set(c.id, rec);
+        }).catch((err) => BC.diag.push("coach:schedule", err));
       }
       BC.toast && BC.toast.success("Study sessions added to your planner.");
     } catch (err) {
-      const done = upcomingSessions(rec).filter(({ i }) => rec.added[i]).length;
+      const done = upcomingSessions(rec).filter(({ i }) => isAdded(rec.added[i])).length;
       state.errors.set(c.id, { error: (done ? "Added " + done + " of " + upcomingSessions(rec).length + " sessions. " : "") + "Canvas didn't save the rest. Try again." });
       BC.diag.push("coach:planner", err);
     } finally { state.adding.delete(c.id); render(); }
@@ -463,7 +475,12 @@
       kids.push(el("div", { class: "co-busy", role: "status" }, [el("span", { class: "co-dot" }), "Writing a study plan with ChatGPT…"]));
       return el("div", { class: "co-ai" }, kids);
     }
-    if (!rec || !optedIn(c.id)) {
+    if (!optedIn(c.id)) {
+      kids.push(p(["Study plans are off for this course. Turn them on in Study coach settings, which also lists what gets sent to ChatGPT."], "co-sub"));
+      kids.push(el("div", { class: "co-actions" }, [BC.ui.button("Turn on study plans", { size: "sm", variant: "ghost", iconRight: "external", onClick: (e) => openSettings(e, "coach") })]));
+      return el("div", { class: "co-ai" }, kids);
+    }
+    if (!rec) {
       kids.push(el("div", { class: "co-actions" }, [BC.ui.button("Make a study plan", { size: "sm", variant: "primary", onClick: (e) => makePlan(c, e) })]));
       return el("div", { class: "co-ai" }, kids);
     }
@@ -471,15 +488,16 @@
     kids.push(el("div", { class: "co-tag", text: "ChatGPT" }));
     if (rec.plan.summary) kids.push(p(rich(rec.plan.summary, rec.links), "co-summary"));
     if (next.length) {
-      kids.push(el("ul", { class: "co-plan" }, next.map(({ x, i }) => el("li", { class: rec.added[i] ? "is-added" : null }, [
+      kids.push(el("ul", { class: "co-plan" }, next.map(({ x, i }) => el("li", { class: isAdded(rec.added[i]) ? "is-added" : null }, [
         el("span", { class: "co-when", text: shortDay(sessionStart(x)) + " " + BC.dt.fmtTime(sessionStart(x)) + " · " + fmtMin(x.minutes) }),
         el("span", null, rich(x.task, rec.links)),
       ]))));
     }
     if (rec.plan.caveat) kids.push(p(rich(rec.plan.caveat, rec.links), "co-sub"));
+    else if (!rec.plan.sessions.length) kids.push(p(["No study sessions fit before the deadline."], "co-sub"));
     const stale = isStale(c, rec);
     if (stale) kids.push(p([next.length ? "Your grades or due dates changed since ChatGPT wrote this plan." : "This plan's sessions are over."], "co-sub"));
-    const left = next.filter(({ i }) => !rec.added[i]).length;
+    const left = next.filter(({ i }) => !isAdded(rec.added[i])).length;
     const actions = [];
     if (next.length) {
       const b = BC.ui.button(state.adding.has(c.id) ? "Adding…" : left ? (left < next.length ? "Add the rest to planner" : "Add to planner") : "Added to planner",
@@ -510,6 +528,10 @@
 
   function okRow(c) {
     const next = c.upcoming[0];
+    if (c.status === "unknown") return el("li", null, [
+      el("a", { class: "co-course", href: location.origin + "/courses/" + c.id + "/grades", text: c.name }),
+      el("span", { class: "co-sub", text: "No grades yet." }),
+    ]);
     return el("li", null, [
       el("a", { class: "co-course", href: location.origin + "/courses/" + c.id + "/grades", text: c.name }),
       el("span", { class: "co-grade", text: fmtPct(c.score) + " " + c.letter }),
@@ -543,10 +565,10 @@
       kids.push(state.load === "done" ? el("p", { class: "co-sub", text: "No current courses with grades yet." }) : BC.ui.skeleton(3));
     } else {
       const focus = state.courses.filter((c) => c.status === "behind" || c.status === "watch");
-      const fine = state.courses.filter((c) => c.status === "ok");
+      const fine = state.courses.filter((c) => c.status === "ok" || c.status === "unknown");
       for (const c of focus) { const r = courseRow(c); r.dataset.key = c.id; kids.push(r); }
+      if (!focus.length && fine.some((c) => c.status === "ok")) kids.push(el("p", { class: "co-sub", text: "Every graded course is at or above its target." }));
       if (fine.length) kids.push(el("ul", { class: "co-ok" }, fine.map(okRow)));
-      if (!focus.length) kids.push(el("p", { class: "co-sub", text: "Every course is at or above its target." }));
     }
     const foot = [];
     if (state.ai && !state.ai.connected) {
@@ -622,9 +644,13 @@ a { color: var(--bc-link, #2563eb); }
 
   function apply(settings, ctx) {
     const on = ctx.page === "dashboard" && settings.dashboard && settings.dashboard.enabled && settings.coach && settings.coach.enabled;
-    if (!on) { BC.injector.removeNode("bc-coach"); return; }
+    if (!on) {
+      BC.injector.removeNode("bc-coach");
+      if (state.load !== "idle") { state.gen++; state.load = "idle"; state.next = 0; }
+      return;
+    }
     BC.lifecycle.pageBag("coach").once("visit", () => {
-      state.gen++; state.load = "idle"; state.next = 0; state.failures = 0; state.autoTried.clear();
+      state.gen++; state.load = "idle"; state.next = 0; state.failures = 0;
     });
     const m = mount();
     if (!m) return;
@@ -643,7 +669,7 @@ a { color: var(--bc-link, #2563eb); }
     apply,
     unmount() {
       state.gen++;
-      state.load = "idle"; state.raw = []; state.courses = []; state.plans.clear(); state.errors.clear(); state.sig = "";
+      state.load = "idle"; state.raw = []; state.courses = []; state.plans.clear(); state.consent.clear(); state.errors.clear(); state.sig = "";
     },
   });
 })();

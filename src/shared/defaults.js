@@ -222,12 +222,12 @@
     },
 
     // Study coach on the dashboard. The grade math is local. Study plans use the
-    // student's own ChatGPT plan, and only for courses listed in `courses`.
+    // student's own ChatGPT plan, for courses turned on in its settings tab. That
+    // consent lives in the background (src/background/coach.js), not here.
     coach: {
       enabled: true,
       defaultGoal: 80,             // target % for a course without its own goal
       autoUpdate: true,            // rewrite a plan when its course changes, at most once a day
-      courses: {},                 // {courseId: true}: courses whose data may go to ChatGPT
     },
 
     notifications: {

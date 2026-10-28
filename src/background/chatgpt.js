@@ -470,8 +470,8 @@
       return r;
     }
 
-    async function listModels() {
-      const body = await (await apiCall("/models")).json();
+    async function listModels(signal) {
+      const body = await (await apiCall("/models", { signal })).json();
       const models = (body && Array.isArray(body.models) ? body.models : [])
         .filter((m) => m && m.visibility === "list" && typeof m.slug === "string")
         .map((m) => ({ slug: m.slug, name: m.display_name || m.slug }));
@@ -485,7 +485,7 @@
     // `text` is the Responses output format, such as a JSON schema.
     async function respond({ input, instructions, model, onDelta, text, signal }) {
       const p = await prefs();
-      const body = { model: model || p.model || ((await listModels())[0] || {}).slug, input, store: false, stream: true };
+      const body = { model: model || p.model || ((await listModels(signal))[0] || {}).slug, input, store: false, stream: true };
       if (!body.model) throw fail("No ChatGPT model is available for this account.", { code: "no_model" });
       if (instructions) body.instructions = instructions;
       if (text) body.text = text;

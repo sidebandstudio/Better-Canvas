@@ -303,6 +303,19 @@ test("responses stream with store:false, and only response.completed counts", as
   assert.equal((await h.service.test()).text, "Hi");
 });
 
+test("a response sends its output format, and its time limit covers the model lookup", async () => {
+  const h = await harness();
+  await h.connect();
+  await h.callback({ code: "c", client_id: "oaiapp_1" });
+  const format = { format: { type: "json_schema", name: "plan", strict: true, schema: { type: "object" } } };
+  await h.service.respond({ input: [{ role: "user", content: "hi" }], text: format });
+  assert.deepEqual(plain(h.calls.filter((c) => c.url.endsWith("/responses")).pop().body.text), format);
+  // With no model saved, the lookup runs first. A stalled one gives up with the request.
+  await h.store.set("prefs", Object.assign(await h.store.get("prefs"), { model: "" }));
+  h.world.stall = /\/v1\/models$/;
+  await assert.rejects(h.service.respond({ input: [], signal: AbortSignal.timeout(30) }), (e) => e.name === "TimeoutError");
+});
+
 test("disconnect revokes the refresh token before forgetting it", async () => {
   const h = await harness();
   await h.connect();

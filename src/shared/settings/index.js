@@ -1663,7 +1663,7 @@
 
   // The section itself is src/content/features/coach.js. Choosing which courses
   // go to ChatGPT happens on Better Canvas's own page, like signing in, because a
-  // Canvas page could flip a switch in the drawer.
+  // Canvas page could flip a switch in the drawer or rewrite what it says.
   function renderCoach(store, adapter, ctx) {
     const C = S();
     const k = store.get().coach;
@@ -1675,34 +1675,49 @@
     let ownPage = false;
     try { ownPage = location.origin === new URL(chrome.runtime.getURL("")).origin; } catch (_) {}
 
+    // Consent is per course, per student and per Canvas site, and the background
+    // keeps it. Courses come from an open Canvas tab; courses turned on somewhere
+    // else stay listed so they can be turned off.
     const list = el("div", { class: "bcs-coach" }, [BC.ui.skeleton(3)]);
-    function drawCourses(courses) {
-      if (!courses.length) { list.replaceChildren(BC.ui.empty("No current courses found.", null, { icon: "info" })); return; }
-      list.replaceChildren(...courses.map((cr) => ownPage
-        ? row({ label: cr.name, control: C.switch({ ariaLabel: "Send " + cr.name + " to ChatGPT",
-            get: () => !!store.get().coach.courses[cr.id],
-            set: (v) => {
-              store.set((x) => { if (v) x.coach.courses[cr.id] = true; else delete x.coach.courses[cr.id]; });
-              if (!v) send("bc:coach:forget", { courseId: cr.id });
-            } }) })
-        : row({ label: cr.name, hint: store.get().coach.courses[cr.id] ? "Sent to ChatGPT for study plans." : "Not sent to ChatGPT." })));
+    async function drawCourses() {
+      const [site, given] = await Promise.all([
+        adapter.getCoachCourses ? adapter.getCoachCourses().catch(() => null) : null,
+        send("bc:coach:consents"),
+      ]);
+      if (!list.isConnected) return;
+      const on = new Map(((given && given.consents) || []).map((x) => [x.origin + "|" + x.user + "|" + x.courseId, x]));
+      const host = (origin) => { try { return new URL(origin).host; } catch (_) { return origin; } };
+      const toggle = (origin, user, courseId, name) => BC.ui.toggle({ checked: on.has(origin + "|" + user + "|" + courseId), ariaLabel: "Send " + name + " to ChatGPT",
+        onChange: async (v) => {
+          const r = await send("bc:coach:consent", { origin, user, courseId, name, on: v });
+          if (!r.ok && BC.toast) BC.toast.error(r.error || "Couldn't save that. Try again.");
+          drawCourses();
+        } }).root;
+      const rows = [];
+      if (site) for (const cr of site.courses) rows.push(row({ label: cr.name, hint: host(site.origin), control: toggle(site.origin, site.user, cr.id, cr.name) }));
+      for (const x of on.values()) {
+        if (site && x.origin === site.origin && x.user === site.user && site.courses.some((cr) => cr.id === x.courseId)) continue;
+        rows.push(row({ label: x.name || "Course " + x.courseId, hint: host(x.origin) + ". Not in the open Canvas tab.", control: toggle(x.origin, x.user, x.courseId, x.name || "this course") }));
+      }
+      list.replaceChildren(...(rows.length ? rows : [BC.ui.empty("Open Canvas in a tab to list your courses.", null, { icon: "info" })]));
     }
-    if (!ctx.searching && adapter.getCourses) {
-      adapter.getCourses().then((courses) => { if (list.isConnected) drawCourses(courses || []); })
-        .catch(() => { list.replaceChildren(BC.ui.empty("Open Canvas in a tab to load your courses.", null, { icon: "info" })); });
-    }
+    if (ownPage && !ctx.searching) drawCourses();
 
-    const courseRows = ownPage ? [
-      row({ label: "Courses", hint: "Turn a course on to let ChatGPT write study plans for it. Turning one off deletes its saved plans.", stacked: true, control: list }),
-      row({ label: "Saved plans", hint: "Study plans are kept in this browser, out of backups.",
+    const sent = sec("What gets sent", [
+      el("p", { class: "bcs-prose", text: "For a course you turn on: your scores by assignment group and on each graded item, the names and due dates of upcoming and missing work, the instructions for the next big assignment, module and item titles, the syllabus and the last 5 announcements." }),
+      el("p", { class: "bcs-prose", text: "Never sent: your name, quiz questions or your answers, and courses you haven't turned on. The grades and scores the coach shows are worked out by Better Canvas, not ChatGPT." }),
+    ]);
+    const plans = sec("ChatGPT study plans", [
+      row({ label: "Update plans on their own", hint: "When a grade posts or a due date moves, ChatGPT rewrites that course's plan, at most once a day. Each rewrite uses your ChatGPT plan.",
+        control: C.switch({ ariaLabel: "Update plans on their own", get: () => k.autoUpdate, set: put((x, v) => { x.autoUpdate = v; }) }) }),
+      ownPage ? row({ label: "Courses", hint: "Turn a course on to let ChatGPT write study plans for it. Turning one off deletes its saved plan.", stacked: true, control: list })
+        : row({ label: "Courses sent to ChatGPT", hint: "Choose these on Better Canvas's settings page. A Canvas page can press buttons here, but not there.",
+          control: BC.ui.button("Open Study coach settings", { size: "sm", variant: "primary", iconRight: "external", onClick: () => send("bc:openOptions", { section: "coach" }) }) }),
+      ownPage ? row({ label: "Saved plans", hint: "Study plans are kept in this browser, out of backups.",
         control: BC.ui.button("Delete all plans", { size: "sm", variant: "ghost", onClick: () => send("bc:coach:forget").then((r) => {
           if (BC.toast) r.ok ? BC.toast.success("Study plans deleted.") : BC.toast.error("Couldn't delete the plans. Try again.");
-        }) }) }),
-    ] : [
-      row({ label: "Courses sent to ChatGPT", hint: "Change these on Better Canvas's settings page, where Canvas pages can't press the switches.",
-        control: BC.ui.button("Open Study coach settings", { size: "sm", variant: "primary", iconRight: "external", onClick: () => send("bc:openOptions", { section: "coach" }) }) }),
-      row({ label: "Courses", stacked: true, control: list }),
-    ];
+        }) }) }) : null,
+    ], { description: "Needs ChatGPT connected in the ChatGPT tab. Only the courses you turn on are sent." });
 
     return [
       sec("Dashboard", [
@@ -1712,15 +1727,8 @@
           control: C.number({ ariaLabel: "Default goal", min: 0, max: 100, suffix: "%", get: () => k.defaultGoal,
             set: put((x, v) => { x.defaultGoal = Math.max(0, Math.min(100, Number(v) || 0)); }) }) }),
       ]),
-      sec("ChatGPT study plans", [
-        row({ label: "Update plans on their own", hint: "When a grade posts or a due date moves, ChatGPT rewrites that course's plan, at most once a day. Each rewrite uses your ChatGPT plan.",
-          control: C.switch({ ariaLabel: "Update plans on their own", get: () => k.autoUpdate, set: put((x, v) => { x.autoUpdate = v; }) }) }),
-        ...courseRows,
-      ], { description: "Needs ChatGPT connected in the ChatGPT tab. Only the courses you turn on are sent." }),
-      sec("What gets sent", [
-        el("p", { class: "bcs-prose", text: "For a course you turn on: your scores by assignment group and on each graded item, the names and due dates of upcoming and missing work, the instructions for the next big assignment, module and item titles, the syllabus and the last 5 announcements." }),
-        el("p", { class: "bcs-prose", text: "Never sent: your name, quiz questions or your answers, and courses you haven't turned on. The grades and scores the coach shows are worked out by Better Canvas, not ChatGPT." }),
-      ]),
+      sent,
+      plans,
     ];
   }
 

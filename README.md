@@ -127,7 +127,7 @@ Three modes:
 ### Study coach
 - A dashboard section that ranks your courses by how far each sits from its goal, from Grade Tools or a default of 80%.
 - For the next big assignment it works out the score you need, and how far that assignment can move your grade. Missing work shows what full credit would bring you to. Better Canvas does this math from Canvas's grade data, the same way Grade Tools does.
-- With ChatGPT connected, **Make a study plan** asks your ChatGPT plan for study sessions built from your weakest scores, the syllabus, modules and announcements, with links to the Canvas pages. A course goes to ChatGPT only after you turn it on, and it asks first. ChatGPT never supplies a number the coach shows.
+- With ChatGPT connected, **Make a study plan** asks your ChatGPT plan for study sessions built from your weakest scores, the syllabus, modules and announcements, with links to the Canvas pages. A course goes to ChatGPT only after you turn it on in the Study coach settings tab, which lists what gets sent. ChatGPT never supplies a number the coach shows.
 - **Add to planner** saves each session as a Canvas planner note at its time, and in the planner's Day view.
 - Plans rewrite themselves when a grade posts or a due date moves, at most once a day per course. You can turn that off.
 
@@ -235,7 +235,7 @@ src/
   background/
     service-worker.js  register dynamic scripts on custom domains + badge + context menu + toolbar icon
     chatgpt.js         ChatGPT plan sign-in, token refresh and streamed /v1/responses calls; the only code that holds tokens
-    coach.js           study plans: opt-in and daily-limit checks, the ChatGPT request, and checking and saving the answer
+    coach.js           study plans: consent per course, daily limits, the ChatGPT request, checking and saving the answer
   options/             standalone options page hosting the shared settings UI
 ```
 
