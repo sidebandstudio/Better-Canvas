@@ -51,6 +51,7 @@
     { id: "shortcuts",     group: "Tools",   label: "Shortcuts",        icon: "command",      description: "Keyboard shortcuts for everything. Click one to change it.", render: renderShortcuts },
     { id: "instructor",    group: "Tools",   label: "Instructor",       icon: "users",        description: "Helpers for teachers and TAs. Nothing is written to Canvas.", render: renderInstructor },
     { id: "chatgpt",       group: "Tools",   label: "ChatGPT",          icon: "link",         description: "Use your own ChatGPT Plus or Pro plan in Better Canvas. Nothing goes to ChatGPT until you connect.", render: renderChatGPT },
+    { id: "coach",         group: "Tools",   label: "Study coach",      icon: "target",       description: "What each course needs to reach its goal, and ChatGPT study plans for the courses you pick.", render: renderCoach },
     { id: "insights",      group: "More",    label: "Insights",         icon: "activity",     description: "Your study time, focus sessions and grade trends, kept on this device.", render: renderInsights },
     { id: "about",         group: "More",    label: "About",            icon: "info",         description: "Version, privacy, diagnostics and reset.", render: renderAbout },
   ];
@@ -1656,6 +1657,71 @@
 
     refresh();
     return [sec("Use your ChatGPT plan", [mount], desc), about];
+  }
+
+  // ---- Study coach ----------------------------------------------------------
+
+  // The section itself is src/content/features/coach.js. Choosing which courses
+  // go to ChatGPT happens on Better Canvas's own page, like signing in, because a
+  // Canvas page could flip a switch in the drawer.
+  function renderCoach(store, adapter, ctx) {
+    const C = S();
+    const k = store.get().coach;
+    const put = (fn) => (v) => store.set((x) => fn(x.coach, v));
+    const send = (type, extra) => new Promise((resolve) => {
+      try { chrome.runtime.sendMessage(Object.assign({ type }, extra || {}), (r) => resolve(chrome.runtime.lastError || !r ? { ok: false } : r)); }
+      catch (_) { resolve({ ok: false }); }
+    });
+    let ownPage = false;
+    try { ownPage = location.origin === new URL(chrome.runtime.getURL("")).origin; } catch (_) {}
+
+    const list = el("div", { class: "bcs-coach" }, [BC.ui.skeleton(3)]);
+    function drawCourses(courses) {
+      if (!courses.length) { list.replaceChildren(BC.ui.empty("No current courses found.", null, { icon: "info" })); return; }
+      list.replaceChildren(...courses.map((cr) => ownPage
+        ? row({ label: cr.name, control: C.switch({ ariaLabel: "Send " + cr.name + " to ChatGPT",
+            get: () => !!store.get().coach.courses[cr.id],
+            set: (v) => {
+              store.set((x) => { if (v) x.coach.courses[cr.id] = true; else delete x.coach.courses[cr.id]; });
+              if (!v) send("bc:coach:forget", { courseId: cr.id });
+            } }) })
+        : row({ label: cr.name, hint: store.get().coach.courses[cr.id] ? "Sent to ChatGPT for study plans." : "Not sent to ChatGPT." })));
+    }
+    if (!ctx.searching && adapter.getCourses) {
+      adapter.getCourses().then((courses) => { if (list.isConnected) drawCourses(courses || []); })
+        .catch(() => { list.replaceChildren(BC.ui.empty("Open Canvas in a tab to load your courses.", null, { icon: "info" })); });
+    }
+
+    const courseRows = ownPage ? [
+      row({ label: "Courses", hint: "Turn a course on to let ChatGPT write study plans for it. Turning one off deletes its saved plans.", stacked: true, control: list }),
+      row({ label: "Saved plans", hint: "Study plans are kept in this browser, out of backups.",
+        control: BC.ui.button("Delete all plans", { size: "sm", variant: "ghost", onClick: () => send("bc:coach:forget").then((r) => {
+          if (BC.toast) r.ok ? BC.toast.success("Study plans deleted.") : BC.toast.error("Couldn't delete the plans. Try again.");
+        }) }) }),
+    ] : [
+      row({ label: "Courses sent to ChatGPT", hint: "Change these on Better Canvas's settings page, where Canvas pages can't press the switches.",
+        control: BC.ui.button("Open Study coach settings", { size: "sm", variant: "primary", iconRight: "external", onClick: () => send("bc:openOptions", { section: "coach" }) }) }),
+      row({ label: "Courses", stacked: true, control: list }),
+    ];
+
+    return [
+      sec("Dashboard", [
+        row({ label: "Study coach", hint: "Ranks your courses by how far they are from their goal, and works out what you need on the next big assignment.",
+          control: C.switch({ ariaLabel: "Study coach", get: () => k.enabled, set: put((x, v) => { x.enabled = v; }) }) }),
+        row({ label: "Default goal", hint: "For courses without their own goal. Set a course's goal in Grade Tools on its Grades page.",
+          control: C.number({ ariaLabel: "Default goal", min: 0, max: 100, suffix: "%", get: () => k.defaultGoal,
+            set: put((x, v) => { x.defaultGoal = Math.max(0, Math.min(100, Number(v) || 0)); }) }) }),
+      ]),
+      sec("ChatGPT study plans", [
+        row({ label: "Update plans on their own", hint: "When a grade posts or a due date moves, ChatGPT rewrites that course's plan, at most once a day. Each rewrite uses your ChatGPT plan.",
+          control: C.switch({ ariaLabel: "Update plans on their own", get: () => k.autoUpdate, set: put((x, v) => { x.autoUpdate = v; }) }) }),
+        ...courseRows,
+      ], { description: "Needs ChatGPT connected in the ChatGPT tab. Only the courses you turn on are sent." }),
+      sec("What gets sent", [
+        el("p", { class: "bcs-prose", text: "For a course you turn on: your scores by assignment group and on each graded item, the names and due dates of upcoming and missing work, the instructions for the next big assignment, module and item titles, the syllabus and the last 5 announcements." }),
+        el("p", { class: "bcs-prose", text: "Never sent: your name, quiz questions or your answers, and courses you haven't turned on. The grades and scores the coach shows are worked out by Better Canvas, not ChatGPT." }),
+      ]),
+    ];
   }
 
   // ---- Insights -------------------------------------------------------------

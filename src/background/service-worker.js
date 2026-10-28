@@ -4,8 +4,9 @@
  * Manages toolbar badge count. All content-side features run in the tab.
  */
 
-// ChatGPT plan sign-in. Firefox loads it from the manifest's background scripts.
-if (typeof importScripts === "function") importScripts("chatgpt.js");
+// ChatGPT plan sign-in and the study coach that uses it. Firefox loads them from
+// the manifest's background scripts.
+if (typeof importScripts === "function") importScripts("chatgpt.js", "coach.js");
 
 const CONTENT_JS = [
   "src/shared/defaults.js",
@@ -37,6 +38,7 @@ const CONTENT_JS = [
   "src/content/features/dashboard.js",
   "src/content/features/todo.js",
   "src/content/features/grades.js",
+  "src/content/features/coach.js",
   "src/content/features/notifications.js",
   "src/content/features/files.js",
   "src/content/features/announcements.js",

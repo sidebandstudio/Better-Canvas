@@ -10,7 +10,7 @@ On Canvas pages, Better Canvas reads the page and calls your school's Canvas API
 
 ## What it saves in Canvas
 
-Tasks you add through the planner, the right-click "add this as a task" item or the syllabus scanner are saved in Canvas as planner notes. The syllabus scanner sends the title, date and course you pick. Canvas stores these notes, not Better Canvas. Marking a Canvas planner item done updates Canvas. Done marks on recurring tasks stay in your browser.
+Tasks you add through the planner, the right-click "add this as a task" item, the syllabus scanner or the study coach's Add to planner button are saved in Canvas as planner notes. The syllabus scanner sends the title, date and course you pick. Canvas stores these notes, not Better Canvas. Marking a Canvas planner item done updates Canvas. Done marks on recurring tasks stay in your browser.
 
 ## What it stores in your browser
 
@@ -25,6 +25,7 @@ Everything else stays in your browser's local extension storage on your device:
 - study time per course, focus sessions, reminder history, grade history and rubric estimates
 - for instructors, attendance marks
 - if you connect ChatGPT, your ChatGPT email, the model you picked and the sign-in tokens. These sit in the extension's own database, which Canvas pages and the extension's page scripts can't read, and backups don't include them. Disconnect signs Better Canvas out at OpenAI and deletes the tokens.
+- study plans ChatGPT wrote for courses you turned on in the study coach, with the Canvas item names and links they mention, and a count of plan requests per day. These sit in the same extension database and stay out of backups. Turning a course off deletes its plans.
 
 You can export and import this data from the extension's settings. Reset puts the options back to their defaults and keeps your saved work. Uninstalling the extension deletes its local storage. It doesn't delete planner notes in Canvas or files you exported.
 
@@ -38,7 +39,8 @@ You can export and import this data from the extension's settings. Reset puts th
 - The live preview in the settings copies the current Canvas page. It may request that page's images, stylesheets, fonts, audio and video again from the same places.
 - Custom CSS, including CSS in an imported theme, can load images, fonts or stylesheets from the addresses it links to.
 - When you use Speak, Canvas text goes to your browser's speech engine. Depending on the voice, that engine may process speech online.
-- If you connect ChatGPT under Settings, ChatGPT, sign-in happens on OpenAI's own page (auth.openai.com) in a new tab. OpenAI then sends the tab to a 127.0.0.1 address, which is your own computer, and Better Canvas reads the sign-in code from it. Requests that use your ChatGPT plan go from your browser to api.openai.com. Today that is the model list and the Test message. Better Canvas never sees your ChatGPT password and can't read your ChatGPT conversations.
+- If you connect ChatGPT under Settings, ChatGPT, sign-in happens on OpenAI's own page (auth.openai.com) in a new tab. OpenAI then sends the tab to a 127.0.0.1 address, which is your own computer, and Better Canvas reads the sign-in code from it. Requests that use your ChatGPT plan go from your browser to api.openai.com. Those are the model list, the Test message and study plans. Better Canvas never sees your ChatGPT password and can't read your ChatGPT conversations.
+- The study coach sends a course to OpenAI only after you turn that course on, and it asks first. For that course it sends your scores by assignment group and on each graded item, the names and due dates of upcoming and missing work, the instructions for the next big assignment, module and item titles, the syllabus and the last 5 announcements. It never sends your name, quiz questions, your answers or other courses. The grades and needed scores the coach shows are worked out on your device.
 
 Better Canvas doesn't sell data or show ads. Its features only send requests and text to the places listed above.
 

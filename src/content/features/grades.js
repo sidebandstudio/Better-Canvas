@@ -320,6 +320,8 @@
     }));
     return BC.grades.computeTotal(cloned);
   }
+  // The study coach asks what one more score would do to the course grade.
+  BC.grades.computeTotalWith = computeTotalWith;
 
   function buildRubricUI(panel, asn, rubric, groups, courseId) {
     const aid = String(asn.id);

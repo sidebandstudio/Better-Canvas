@@ -576,6 +576,7 @@ test("the settings tab, manifests and module agree on the ChatGPT hosts", () => 
     assert.equal(m.host_permissions.some((h) => /openai|127\.0\.0\.1/.test(h)), false, "only asked for at Connect");
     assert.ok(m.optional_host_permissions.includes("*://*/*"));
   }
-  assert.deepEqual(firefox.background.scripts, ["src/background/chatgpt.js", "src/background/service-worker.js"]);
-  assert.match(fs.readFileSync(path.join(root, "src/background/service-worker.js"), "utf8"), /importScripts\("chatgpt\.js"\)/);
+  // The study coach sends its requests through the same service, so it loads after it.
+  assert.deepEqual(firefox.background.scripts, ["src/background/chatgpt.js", "src/background/coach.js", "src/background/service-worker.js"]);
+  assert.match(fs.readFileSync(path.join(root, "src/background/service-worker.js"), "utf8"), /importScripts\("chatgpt\.js", "coach\.js"\)/);
 });

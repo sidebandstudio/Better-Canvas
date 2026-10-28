@@ -482,12 +482,14 @@
 
     // Plan-usage requests must set store:false and stream:true, and carry their
     // history in input; the route rejects temperature, max_output_tokens and others.
-    async function respond({ input, instructions, model, onDelta }) {
+    // `text` is the Responses output format, such as a JSON schema.
+    async function respond({ input, instructions, model, onDelta, text, signal }) {
       const p = await prefs();
       const body = { model: model || p.model || ((await listModels())[0] || {}).slug, input, store: false, stream: true };
       if (!body.model) throw fail("No ChatGPT model is available for this account.", { code: "no_model" });
       if (instructions) body.instructions = instructions;
-      const r = await apiCall("/responses", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (text) body.text = text;
+      const r = await apiCall("/responses", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       return readStream(r, onDelta);
     }
 
@@ -586,6 +588,8 @@
   globalThis.BCChatGPT = api;
   // Listeners go on in the first turn so a sign-in redirect wakes a sleeping worker.
   if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.onUpdated && typeof indexedDB !== "undefined") {
-    install(create({ chrome, fetch: (...a) => fetch(...a), store: idbStore("bc-chatgpt"), crypto: globalThis.crypto }), chrome);
+    // The study coach (coach.js) sends its requests through this same service.
+    api.service = create({ chrome, fetch: (...a) => fetch(...a), store: idbStore("bc-chatgpt"), crypto: globalThis.crypto });
+    install(api.service, chrome);
   }
 })();

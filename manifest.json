@@ -62,6 +62,7 @@
         "src/content/features/dashboard.js",
         "src/content/features/todo.js",
         "src/content/features/grades.js",
+        "src/content/features/coach.js",
         "src/content/features/notifications.js",
         "src/content/features/files.js",
         "src/content/features/announcements.js",

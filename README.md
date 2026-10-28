@@ -124,6 +124,13 @@ Three modes:
 - **Use your own ChatGPT plan.** Settings, ChatGPT, Continue with ChatGPT signs in on OpenAI's page with your ChatGPT Plus or Pro account, including Google, Apple or Microsoft logins. No API key. Pick a model, send a test message, see usage in ChatGPT settings, or disconnect.
 - Tokens stay in the extension's own database and never reach Canvas pages. Requests go straight to api.openai.com.
 
+### Study coach
+- A dashboard section that ranks your courses by how far each sits from its goal, from Grade Tools or a default of 80%.
+- For the next big assignment it works out the score you need, and how far that assignment can move your grade. Missing work shows what full credit would bring you to. Better Canvas does this math from Canvas's grade data, the same way Grade Tools does.
+- With ChatGPT connected, **Make a study plan** asks your ChatGPT plan for study sessions built from your weakest scores, the syllabus, modules and announcements, with links to the Canvas pages. A course goes to ChatGPT only after you turn it on, and it asks first. ChatGPT never supplies a number the coach shows.
+- **Add to planner** saves each session as a Canvas planner note at its time, and in the planner's Day view.
+- Plans rewrite themselves when a grade posts or a due date moves, at most once a day per course. You can turn that off.
+
 ### Backgrounds & CSS
 - Full-page background: solid / gradient / image / **repeating pattern** (dots, grid, diagonal, topography), blur + opacity.
 - **Custom CSS** escape hatch, injected on every page.
@@ -158,10 +165,10 @@ For non-instructure.com Canvas (e.g. `canvas.yourschool.edu`), click the toolbar
 
 ## Privacy
 
-Your settings and local study data stay on this device. Image searches send your query to api.openverse.org. Photo themes and previews load images from third-party hosts. If you connect ChatGPT, sign-in goes through auth.openai.com and requests that use your plan go to api.openai.com. No telemetry. Canvas calls go to your own Canvas instance using your existing cookies:
+Your settings and local study data stay on this device. Image searches send your query to api.openverse.org. Photo themes and previews load images from third-party hosts. If you connect ChatGPT, sign-in goes through auth.openai.com and requests that use your plan go to api.openai.com. The study coach sends a course there only after you turn it on. No telemetry. Canvas calls go to your own Canvas instance using your existing cookies:
 
 - **Reads (GET):** dashboard cards, courses/scores/terms, planner items, assignment groups, rubrics, modules, files, announcements, course people.
-- **Writes (planner only):** mark a task complete, add a personal task (planner widget + syllabus extract). Uses Canvas's CSRF token — same as the Canvas UI. Nothing else is ever written — no grades, no quiz answers.
+- **Writes (planner only):** mark a task complete, add a personal task (planner widget, syllabus extract, study coach sessions). Uses Canvas's CSRF token — same as the Canvas UI. Nothing else is ever written — no grades, no quiz answers.
 
 Settings live in `bcSettings`. Everything device-local — sticky notes, drafts, quiz drafts, study time, grade history, and planner metadata (stars, snoozes, subtasks, kanban status, streaks) — lives in `bcLocal`. Export/import carries both, so a backup round-trips your planner state as well as your settings. Telemetry is hard-wired **off**.
 
@@ -205,6 +212,7 @@ src/
       dashboard.js     cards, layouts, badges, inline grade, sparkline, hover preview
       todo.js          planner widget + kanban + time-block + recurring + streaks + Pomodoro
       grades.js        what-if, weight donut, final solver, trend chart, rubric predictor
+      coach.js         study coach: needed scores per course, ChatGPT study plans, add to planner
       notifications.js due-soon + goal + announcement scans + in-page + browser toasts
       files.js         cross-course files library
       announcements.js aggregator panel
@@ -227,6 +235,7 @@ src/
   background/
     service-worker.js  register dynamic scripts on custom domains + badge + context menu + toolbar icon
     chatgpt.js         ChatGPT plan sign-in, token refresh and streamed /v1/responses calls; the only code that holds tokens
+    coach.js           study plans: opt-in and daily-limit checks, the ChatGPT request, and checking and saving the answer
   options/             standalone options page hosting the shared settings UI
 ```
 
