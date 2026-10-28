@@ -29,6 +29,7 @@
   const ORIGINS = ["*://127.0.0.1/*", "https://auth.openai.com/*", "https://api.openai.com/*"];
   const USAGE_URL = "https://chatgpt.com/settings/usage";
   const PENDING_MS = 10 * 60 * 1000;
+  const FINISHING_MS = 60 * 1000;
   const EARLY_REFRESH_MS = 2 * 60 * 1000;
   const CLOCK_SKEW_S = 60;
   // OpenAI's refresh errors that mean the refresh token can never work again.
@@ -186,7 +187,7 @@
         const block = buf.slice(0, i).replace(/\r/g, "");
         buf = buf.slice(buf.slice(i).match(/^\r?\n\r?\n/)[0].length + i);
         const r = handle(block);
-        if (r && r.done) { try { reader.cancel(); } catch (_) {} return { text }; }
+        if (r && r.done) { reader.cancel().catch(() => {}); return { text }; }
       }
       if (done) break;
     }
@@ -224,6 +225,11 @@
     const json = (r) => r.json().catch(() => null);
     let discovery = null, jwks = null, refreshing = null;
     const handling = new Set();
+    // Sign-in, refresh and disconnect take turns, so Disconnect can't be undone by
+    // an exchange or refresh that was already on its way back.
+    let turn = Promise.resolve();
+    const exclusive = (fn) => { const r = turn.then(fn); turn = r.catch(() => {}); return r; };
+    const extOrigin = chrome.runtime.getURL("");
 
     async function getDiscovery() {
       if (discovery) return discovery;
@@ -261,22 +267,34 @@
     const prefs = async () => (await store.get("prefs")) || {};
     async function setPrefs(patch) { await store.set("prefs", Object.assign(await prefs(), patch)); }
     async function setError(e) {
-      await store.set("lastError", e ? { message: e.message, code: e.code || "", manageUsage: !!e.manageUsage, at: now() } : null);
+      await store.set("lastError", e ? { message: e.message, code: e.code || "", manageUsage: !!e.manageUsage,
+        status: e.status || 0, requestId: e.requestId || "", at: now() } : null);
     }
     async function pendingAttempt() {
       const p = await store.get("pending");
-      if (p && now() - p.startedAt > PENDING_MS) { await store.del("pending"); return null; }
-      return p || null;
+      if (!p) return null;
+      // A worker stopped mid-exchange leaves "finishing" behind; don't wait on it forever.
+      if (p.finishing && now() - p.finishing > FINISHING_MS) {
+        await store.del("pending");
+        await setError(fail("Sign-in was interrupted. Try again.", { code: "interrupted" }));
+        return null;
+      }
+      if (now() - p.startedAt > PENDING_MS) { await store.del("pending"); return null; }
+      return p;
     }
 
-    async function connect({ different, consent, returnTabId } = {}) {
+    async function connect({ different, consent, clientId, returnTabId } = {}) {
       if (!(await chrome.permissions.contains({ origins: ORIGINS }))) return { ok: false, needsPermission: true, origins: ORIGINS };
       const old = await pendingAttempt();
+      if (old && old.finishing) throw fail("Better Canvas is still finishing the last sign-in.", { code: "busy" });
       if (old && old.tabId != null) chrome.tabs.remove(old.tabId).catch(() => {});
+      const list = await registrations();
       // A registration whose first code exchange failed has no account yet. OpenAI
       // wants the retry to reuse its issued client ID, not register again.
-      const unfinished = (await registrations()).find((r) => !r.sub) || null;
-      const reg = different ? null : (await activeRegistration()) || unfinished;
+      const unfinished = list.find((r) => !r.sub) || null;
+      const reg = clientId ? list.find((r) => r.clientId === clientId && r.sub)
+        : different ? null : (await activeRegistration()) || unfinished;
+      if (clientId && !reg) throw fail("That ChatGPT account isn't saved here anymore.", { code: "unknown_account" });
       const cred = reg ? await store.get("cred:" + reg.clientId) : null;
       const { verifier, challenge } = await pkce(crypto);
       const port = 20000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 40000);
@@ -293,7 +311,9 @@
       // Saved before the tab opens, so a fast redirect still finds it.
       await store.set("pending", pending);
       await setError(null);
-      const tab = await chrome.tabs.create({ url, active: true });
+      let tab;
+      try { tab = await chrome.tabs.create({ url, active: true }); }
+      catch (e) { await store.del("pending"); throw e; }
       pending.tabId = tab.id;
       const still = await store.get("pending");
       if (still && still.state === pending.state) await store.set("pending", pending);
@@ -302,6 +322,7 @@
 
     async function cancel() {
       const p = await pendingAttempt();
+      if (p && p.finishing) return { ok: true };
       await store.del("pending");
       if (p && p.tabId != null) chrome.tabs.remove(p.tabId).catch(() => {});
       return { ok: true };
@@ -309,27 +330,35 @@
 
     async function onTabUpdated(tabId, change, tab) {
       const url = change.url || (tab && (tab.pendingUrl || tab.url)) || "";
-      if (!/^https?:\/\/127\.0\.0\.1:/.test(url) || handling.has(tabId)) return;
-      const pending = await pendingAttempt();
-      if (!pending || pending.tabId !== tabId || !isCallback(url, pending)) return;
+      // Taken before the first await, so two updates for one callback can't both spend its code.
+      if (!/^https?:\/\/127\.0\.0\.1:\d+\/auth\/callback\?/.test(url) || handling.has(tabId)) return;
       handling.add(tabId);
+      let pending = null;
       try {
-        // One use per attempt: a second update for the same address finds nothing.
-        await store.del("pending");
+        const p = await pendingAttempt();
+        if (!p || p.tabId !== tabId || p.finishing || !isCallback(url, p)) return;
+        pending = p;
+        // Stays pending, marked used, until the exchange is done, so settings keep waiting.
+        await store.set("pending", Object.assign({}, p, { finishing: now() }));
         chrome.tabs.remove(tabId).catch(() => {});
-        await finish(pending, url);
+        await exclusive(() => finish(p, url));
         await setError(null);
+        await listModels().catch(() => {});
       } catch (e) {
         await setError(e);
       } finally {
+        if (pending) {
+          const still = await store.get("pending");
+          if (still && still.state === pending.state) await store.del("pending");
+          if (pending.returnTabId != null) chrome.tabs.update(pending.returnTabId, { active: true }).catch(() => {});
+        }
         handling.delete(tabId);
-        if (pending.returnTabId != null) chrome.tabs.update(pending.returnTabId, { active: true }).catch(() => {});
       }
     }
 
     async function onTabRemoved(tabId) {
       const p = await pendingAttempt();
-      if (!p || p.tabId !== tabId || handling.has(tabId)) return;
+      if (!p || p.tabId !== tabId || p.finishing || handling.has(tabId)) return;
       await store.del("pending");
       await setError(fail("The ChatGPT sign-in tab closed before it finished.", { code: "closed" }));
     }
@@ -361,7 +390,6 @@
         scopes, savedAt: now(),
       });
       await store.set("active", clientId);
-      if (scopes.includes(PLAN_SCOPE)) await listModels().catch(() => {});
     }
 
     // One refresh at a time. Refresh tokens rotate, so two at once would leave
@@ -371,12 +399,14 @@
       if (!cred || !cred.refreshToken) throw fail("Connect ChatGPT first.", { code: "signed_out" });
       if (cred.expiresAt - EARLY_REFRESH_MS > now()) return cred;
       if (cred.earliestRefreshAt && now() < cred.earliestRefreshAt && cred.expiresAt > now()) return cred;
-      if (!refreshing) refreshing = refresh(cred.clientId).finally(() => { refreshing = null; });
+      if (!refreshing) refreshing = exclusive(() => refresh(cred.clientId)).finally(() => { refreshing = null; });
       return refreshing;
     }
     async function refresh(clientId) {
+      // Reread inside the turn: Disconnect may have run, or another refresh finished.
       const cred = await store.get("cred:" + clientId);
-      if (!cred) throw fail("Connect ChatGPT first.", { code: "signed_out" });
+      if (!cred || !cred.refreshToken || (await store.get("active")) !== clientId) throw fail("Connect ChatGPT first.", { code: "signed_out" });
+      if (cred.expiresAt - EARLY_REFRESH_MS > now()) return cred;
       const r = await post(TOKEN_URL, { grant_type: "refresh_token", client_id: clientId, refresh_token: cred.refreshToken, resource: API });
       const body = await json(r);
       if (!r.ok || !body || !body.access_token) {
@@ -435,7 +465,7 @@
 
     // Revoke at OpenAI first, then forget the tokens. The registration and host ID
     // stay so the next sign-in reuses the same client.
-    async function disconnect() {
+    const disconnect = () => exclusive(async () => {
       await cancel();
       const cred = await activeCred();
       if (!cred) return { ok: true, revoked: true };
@@ -454,16 +484,22 @@
       await store.del("cred:" + cred.clientId);
       await setPrefs({ models: [], welcomed: true });
       return { ok: true, revoked };
-    }
+    });
 
     async function status() {
-      const [granted, pending, reg, cred, p, lastError] = await Promise.all([
-        chrome.permissions.contains({ origins: ORIGINS }), pendingAttempt(), activeRegistration(), activeCred(), prefs(), store.get("lastError")]);
+      // First, on its own: clearing a stuck attempt records the error read below.
+      const pending = await pendingAttempt();
+      const [granted, reg, cred, p, lastError] = await Promise.all([
+        chrome.permissions.contains({ origins: ORIGINS }), activeRegistration(), activeCred(), prefs(), store.get("lastError")]);
       const connected = !!(cred && cred.refreshToken);
       const planEnabled = connected && cred.scopes.includes(PLAN_SCOPE);
+      const saved = (await registrations()).filter((r) => r.sub);
+      // Email labels each account; the same email can belong to two workspaces.
+      const accounts = saved.map((r, i) => ({ clientId: r.clientId, active: !!reg && r.clientId === reg.clientId,
+        label: (r.email || "ChatGPT account") + (saved.some((x, j) => j < i && x.email === r.email) ? " (" + (i + 1) + ")" : "") }));
       return {
-        ok: true, granted, pending: !!pending, connected, planEnabled,
-        email: (cred && cred.email) || (reg && reg.email) || "", saved: !!reg,
+        ok: true, granted, pending: !!pending, finishing: !!(pending && pending.finishing), connected, planEnabled,
+        email: (cred && cred.email) || (reg && reg.email) || "", accounts,
         models: planEnabled ? p.models || [] : [], model: p.model || "",
         welcome: planEnabled && !p.welcomed, lastError: lastError || null, usageUrl: USAGE_URL, origins: ORIGINS,
       };
@@ -479,7 +515,7 @@
     const routes = {
       "bc:chatgpt:status": () => status(),
       "bc:chatgpt:connect": (msg, sender) => connect({ different: !!msg.different, consent: !!msg.consent,
-        returnTabId: sender && sender.tab ? sender.tab.id : null }),
+        clientId: typeof msg.clientId === "string" ? msg.clientId : "", returnTabId: sender && sender.tab ? sender.tab.id : null }),
       "bc:chatgpt:cancel": () => cancel(),
       "bc:chatgpt:disconnect": () => disconnect(),
       "bc:chatgpt:models": () => listModels().then((models) => ({ ok: true, models })),
@@ -491,9 +527,15 @@
     function handleMessage(msg, sender, sendResponse) {
       const route = msg && routes[msg.type];
       if (!route) return false;
-      if (!sender || sender.id !== chrome.runtime.id) { sendResponse({ ok: false, error: "Untrusted message sender" }); return false; }
+      // Only Better Canvas's own pages. A Canvas page shares the DOM with the content
+      // script's drawer and can click its buttons, so nothing here answers a Canvas tab.
+      if (!sender || sender.id !== chrome.runtime.id || typeof sender.url !== "string" || !sender.url.startsWith(extOrigin)) {
+        sendResponse({ ok: false, error: "Open Better Canvas's settings page to use ChatGPT." });
+        return false;
+      }
       Promise.resolve().then(() => route(msg, sender)).then(sendResponse, (e) => sendResponse({
-        ok: false, error: e.message, code: e.code || "", manageUsage: !!e.manageUsage, usageUrl: USAGE_URL }));
+        ok: false, error: e.message, code: e.code || "", manageUsage: !!e.manageUsage, usageUrl: USAGE_URL,
+        status: e.status || 0, requestId: e.requestId || "" }));
       return true;
     }
 

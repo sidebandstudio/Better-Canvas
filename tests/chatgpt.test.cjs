@@ -41,7 +41,7 @@ async function harness(opts = {}) {
   let clock = 1_800_000_000_000;
   const world = {
     granted: true, sub: "user-1", email: "student@example.edu", scope: "chatgpt.tokens.use.direct email offline_access openid profile resource.invoke",
-    refreshCount: 0, tokenStatus: 200, tokenError: null, refreshError: null, revokeStatus: 200,
+    refreshCount: 0, tokenStatus: 200, tokenError: null, refreshError: null, revokeStatus: 200, hold: null,
     responses: () => new Response(sse([{ type: "response.output_text.delta", delta: "Connected" }, { type: "response.completed", response: {} }]), { status: 200 }),
     idClaims: {},
   };
@@ -55,6 +55,7 @@ async function harness(opts = {}) {
     if (url === "https://auth.openai.com/jwks") return json(keys.jwks);
     if (url === "https://auth.openai.com/oauth/revoke") return new Response("", { status: world.revokeStatus });
     if (url === "https://auth.openai.com/api/accounts/oauth/token") {
+      if (world.hold) await world.hold;
       if (form.grant_type === "refresh_token") {
         world.refreshCount++;
         if (world.refreshError) return json({ error: world.refreshError }, 400);
@@ -71,7 +72,7 @@ async function harness(opts = {}) {
     throw new Error("unexpected fetch " + url);
   }
   const chrome = {
-    runtime: { id: "bc" },
+    runtime: { id: "bc", getURL: (f) => "chrome-extension://bc/" + f },
     permissions: { contains: async () => world.granted },
     tabs: {
       create: async ({ url }) => { tabs.push(url); return { id: 7 }; },
@@ -91,8 +92,13 @@ async function harness(opts = {}) {
     const q = new URLSearchParams(Object.assign({ state: p.state }, params));
     await service.onTabUpdated(tabId, { url: p.redirectUri + "?" + q }, { id: tabId });
   }
-  return { service, store, data, calls, tabs, removed, world, connect, callback, tick: (ms) => { clock += ms; }, now: () => clock, keys };
+  const page = { id: "bc", url: "chrome-extension://bc/src/options/options.html?section=chatgpt", tab: { id: 3 } };
+  const ask = (msg, sender = page) => new Promise((res) => { if (!service.handleMessage(msg, sender, res)) setTimeout(() => res(null), 0); });
+  return { service, store, data, calls, tabs, removed, world, connect, callback, ask, page, tick: (ms) => { clock += ms; }, now: () => clock, keys };
 }
+// A promise and the function that settles it, for holding a fake response mid-flight.
+function gate() { let open; const p = new Promise((r) => { open = r; }); return { p, open }; }
+const flush = () => new Promise((r) => setImmediate(r));
 const tokenCalls = (h) => h.calls.filter((c) => c.url.endsWith("/oauth/token"));
 
 test("a first sign-in registers Better Canvas with PKCE and a 127.0.0.1 callback", async () => {
@@ -260,7 +266,7 @@ test("refreshes run one at a time, rotate the refresh token, and a dead one sign
   await assert.rejects(h.service.freshCred(), (e) => e.code === "signed_out");
   const s = await h.service.status();
   assert.equal(s.connected, false);
-  assert.equal(s.saved, true, "the registration survives for the next sign-in");
+  assert.equal(s.accounts.length, 1, "the registration survives for the next sign-in");
 });
 
 test("responses stream with store:false, and only response.completed counts", async () => {
@@ -329,12 +335,135 @@ test("connect waits for permission, a closed tab ends the attempt, and other sen
   assert.equal(s.pending, false);
   assert.equal(s.lastError.code, "closed");
 
-  let reply = null;
-  assert.equal(h.service.handleMessage({ type: "bc:chatgpt:status" }, { id: "another-extension" }, (x) => { reply = x; }), false);
-  assert.equal(reply.ok, false);
-  assert.equal(h.service.handleMessage({ type: "bc:other" }, { id: "bc" }, () => {}), false);
-  const answer = await new Promise((res) => h.service.handleMessage({ type: "bc:chatgpt:status" }, { id: "bc" }, res));
-  assert.equal(answer.ok, true);
+  assert.equal((await h.ask({ type: "bc:chatgpt:status" }, { id: "another-extension", url: h.page.url })).ok, false);
+  assert.equal(await h.ask({ type: "bc:other" }), null, "other messages are left to the service worker");
+  assert.equal((await h.ask({ type: "bc:chatgpt:status" })).ok, true);
+});
+
+test("Canvas tabs can't drive ChatGPT, even through the extension's own content script", async () => {
+  const h = await harness();
+  await h.connect();
+  await h.callback({ code: "c", client_id: "oaiapp_1" });
+  const canvas = { id: "bc", url: "https://school.instructure.com/courses/1", tab: { id: 9 }, frameId: 0 };
+  for (const type of ["bc:chatgpt:status", "bc:chatgpt:connect", "bc:chatgpt:test", "bc:chatgpt:disconnect", "bc:chatgpt:models",
+    "bc:chatgpt:setModel", "bc:chatgpt:cancel", "bc:chatgpt:welcomed", "bc:chatgpt:clearError"]) {
+    const r = await h.ask({ type }, canvas);
+    assert.equal(r.ok, false, type);
+  }
+  assert.equal(h.calls.filter((c) => c.url.endsWith("/responses") || c.url.endsWith("/oauth/revoke")).length, 0);
+  assert.equal((await h.service.status()).connected, true);
+  const settings = fs.readFileSync(path.join(root, "src/shared/settings/index.js"), "utf8");
+  assert.match(settings, /Open ChatGPT settings/, "the drawer sends people to the settings page instead");
+});
+
+test("one callback exchanges its code once, even when two updates race", async () => {
+  const h = await harness();
+  await h.connect();
+  const p = await h.store.get("pending");
+  const url = p.redirectUri + "?" + new URLSearchParams({ code: "c", state: p.state, client_id: "oaiapp_1" });
+  await Promise.all([h.service.onTabUpdated(7, { url }, { id: 7 }), h.service.onTabUpdated(7, {}, { id: 7, url })]);
+  assert.equal(tokenCalls(h).length, 1);
+  const s = await h.service.status();
+  assert.equal(s.connected, true);
+  assert.equal(s.lastError, null);
+});
+
+test("settings keep waiting while the code is exchanged, and a stuck exchange gives up", async () => {
+  const h = await harness();
+  await h.connect();
+  const g = gate();
+  h.world.hold = g.p;
+  const done = h.callback({ code: "c", client_id: "oaiapp_1" });
+  await flush(); await flush();
+  let s = await h.service.status();
+  assert.equal(s.pending, true, "still pending mid-exchange");
+  assert.equal(s.finishing, true);
+  assert.equal(s.connected, false);
+  await h.service.cancel();
+  assert.equal((await h.service.status()).pending, true, "Cancel can't drop an exchange in progress");
+  assert.equal((await h.ask({ type: "bc:chatgpt:connect" })).code, "busy");
+  h.world.hold = null; g.open();
+  await done;
+  s = await h.service.status();
+  assert.equal(s.pending, false);
+  assert.equal(s.connected, true);
+  assert.equal(s.models.length, 1, "models are loaded before the wait ends");
+
+  const h2 = await harness();
+  await h2.connect();
+  const p = await h2.store.get("pending");
+  await h2.store.set("pending", Object.assign({}, p, { finishing: h2.now() }));
+  h2.tick(61 * 1000);
+  s = await h2.service.status();
+  assert.equal(s.pending, false);
+  assert.equal(s.lastError.code, "interrupted");
+});
+
+test("Disconnect waits for a sign-in or refresh in flight, then revokes what it returned", async () => {
+  const h = await harness();
+  await h.connect();
+  const g = gate();
+  h.world.hold = g.p;
+  const signIn = h.callback({ code: "c", client_id: "oaiapp_1" });
+  await flush(); await flush();
+  const out = h.service.disconnect();
+  h.world.hold = null; g.open();
+  await signIn;
+  const r = await out;
+  assert.equal(r.revoked, true);
+  assert.equal(h.calls.find((c) => c.url.endsWith("/oauth/revoke")).form.token, "refresh-1", "the token that arrived late is revoked");
+  assert.equal((await h.service.status()).connected, false);
+
+  await h.connect();
+  await h.callback({ code: "c2" });
+  h.tick(59 * 60 * 1000);
+  const g2 = gate();
+  h.world.hold = g2.p;
+  const renewing = h.service.freshCred();
+  await flush(); await flush();
+  const out2 = h.service.disconnect();
+  h.world.hold = null; g2.open();
+  await renewing;
+  await out2;
+  const revokes = h.calls.filter((c) => c.url.endsWith("/oauth/revoke"));
+  assert.equal(revokes.at(-1).form.token, "refresh-2", "the rotated refresh token is the one revoked");
+  assert.equal((await h.service.status()).connected, false, "a refresh that lands late can't sign back in");
+  await assert.rejects(h.service.freshCred(), (e) => e.code === "signed_out");
+});
+
+test("saved accounts can be picked again without registering a new client", async () => {
+  const h = await harness();
+  await h.connect();
+  await h.callback({ code: "a", client_id: "oaiapp_A" });
+  await h.service.disconnect();
+  h.world.sub = "user-2"; h.world.email = "other@example.edu";
+  await h.connect({ different: true });
+  assert.equal(new URL(h.tabs.at(-1)).searchParams.get("client_id"), "dynamic_agent_client");
+  await h.callback({ code: "b", client_id: "oaiapp_B" });
+  await h.service.disconnect();
+  const s = await h.service.status();
+  assert.deepEqual(plain(s.accounts.map((a) => [a.clientId, a.label, a.active])),
+    [["oaiapp_B", "other@example.edu", true], ["oaiapp_A", "student@example.edu", false]]);
+  await h.connect({ clientId: "oaiapp_A" });
+  const q = new URL(h.tabs.at(-1)).searchParams;
+  assert.equal(q.get("client_id"), "oaiapp_A");
+  assert.equal(q.get("login_hint"), "student@example.edu");
+  h.world.sub = "user-1"; h.world.email = "student@example.edu";
+  await h.callback({ code: "a2" });
+  assert.equal((await h.service.status()).email, "student@example.edu");
+  await assert.rejects(h.service.connect({ clientId: "oaiapp_gone" }), (e) => e.code === "unknown_account");
+});
+
+test("errors keep the HTTP status and request ID for reporting", async () => {
+  const h = await harness();
+  await h.connect();
+  await h.callback({ code: "c", client_id: "oaiapp_1" });
+  h.world.responses = () => new Response(JSON.stringify({ error: { code: "subscription_sharing_invalid_user" } }), { status: 401, headers: { "x-request-id": "req_123" } });
+  const r = await h.ask({ type: "bc:chatgpt:test" });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 401);
+  assert.equal(r.requestId, "req_123");
+  assert.equal(r.code, "subscription_sharing_invalid_user");
 });
 
 test("granted ChatGPT hosts never become custom Canvas domains", async () => {
