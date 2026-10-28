@@ -4,6 +4,9 @@
  * Manages toolbar badge count. All content-side features run in the tab.
  */
 
+// ChatGPT plan sign-in. Firefox loads it from the manifest's background scripts.
+if (typeof importScripts === "function") importScripts("chatgpt.js");
+
 const CONTENT_JS = [
   "src/shared/defaults.js",
   "src/shared/themes.js",
@@ -80,8 +83,11 @@ const DYNAMIC_FRAME_ID = "bc-dynamic-frame";
 const MENU_ID = "bc-add-task";
 const BASE_PATTERNS = ["*://*.instructure.com/*"];
 
+// Granted hosts that aren't Canvas: the theme library, and the loopback and
+// OpenAI addresses ChatGPT sign-in asks for. Better Canvas must never run on them.
+const NOT_CANVAS = /^[^:]+:\/\/(api\.openverse\.org|127\.0\.0\.1|auth\.openai\.com|api\.openai\.com)\//;
 function customOrigins(origins) {
-  return (origins || []).filter((o) => !/instructure\.com/.test(o) && o !== "https://api.openverse.org/*");
+  return (origins || []).filter((o) => !/instructure\.com/.test(o) && !NOT_CANVAS.test(o));
 }
 
 // The "add this as a task" menu was limited to *.instructure.com, so it never
@@ -305,7 +311,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "bc:syncRegistration") { syncRegistration().then(() => sendResponse({ ok: true })); return true; }
   // Content scripts can't open the options page themselves.
-  if (msg.type === "bc:openOptions") { chrome.runtime.openOptionsPage(); sendResponse({ ok: true }); return; }
+  if (msg.type === "bc:openOptions") {
+    // A section opens that settings tab, e.g. ChatGPT, whose permission prompt only an extension page can show.
+    if (/^[a-z]+$/.test(msg.section || "")) chrome.tabs.create({ url: chrome.runtime.getURL("src/options/options.html?section=" + msg.section) });
+    else chrome.runtime.openOptionsPage();
+    sendResponse({ ok: true }); return;
+  }
   if (msg.type === "bc:setBadge") {
     try {
       const n = msg.count | 0;

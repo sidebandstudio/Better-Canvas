@@ -30,6 +30,7 @@
   ],
   "background": {
     "scripts": [
+      "src/background/chatgpt.js",
       "src/background/service-worker.js"
     ]
   },

@@ -19,7 +19,8 @@
     tabAt = Date.now();
     tabP = (async () => {
       const perms = await chrome.permissions.getAll();
-      const patterns = new Set(["*://*.instructure.com/*", ...(perms.origins || []).filter((p) => p !== "https://api.openverse.org/*")]);
+      const patterns = new Set(["*://*.instructure.com/*", ...(perms.origins || [])
+        .filter((p) => !/^[^:]+:\/\/(api\.openverse\.org|127\.0\.0\.1|auth\.openai\.com|api\.openai\.com)\//.test(p))]);
       let tabs = [];
       for (const p of patterns) { try { tabs = tabs.concat(await chrome.tabs.query({ url: p })); } catch (_) {} }
       const seen = new Set();
@@ -104,7 +105,8 @@
   BC.storage.load().then((settings) => {
     current = settings;
     paintTokens(current);
-    BC.SettingsUI.render(document.getElementById("bc-settings-root"), adapter, { variant: "page" });
+    BC.SettingsUI.render(document.getElementById("bc-settings-root"), adapter,
+      { variant: "page", initialTab: new URLSearchParams(location.search).get("section") || undefined });
   }).catch((error) => {
     const root = document.getElementById("bc-settings-root");
     root.setAttribute("role", "alert");

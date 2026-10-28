@@ -120,6 +120,10 @@ Three modes:
 ### Instructor helpers
 - **Roster CSV export**, attendance quick-mark (P/A buttons + CSV), **ungraded-count badges** on the assignments index. They appear only in courses where you are a teacher, TA or designer.
 
+### ChatGPT
+- **Use your own ChatGPT plan.** Settings, ChatGPT, Continue with ChatGPT signs in on OpenAI's page with your ChatGPT Plus or Pro account, including Google, Apple or Microsoft logins. No API key. Pick a model, send a test message, see usage in ChatGPT settings, or disconnect.
+- Tokens stay in the extension's own database and never reach Canvas pages. Requests go straight to api.openai.com.
+
 ### Backgrounds & CSS
 - Full-page background: solid / gradient / image / **repeating pattern** (dots, grid, diagonal, topography), blur + opacity.
 - **Custom CSS** escape hatch, injected on every page.
@@ -154,7 +158,7 @@ For non-instructure.com Canvas (e.g. `canvas.yourschool.edu`), click the toolbar
 
 ## Privacy
 
-Your settings and local study data stay on this device. Image searches send your query to api.openverse.org. Photo themes and previews load images from third-party hosts. No telemetry. Canvas calls go to your own Canvas instance using your existing cookies:
+Your settings and local study data stay on this device. Image searches send your query to api.openverse.org. Photo themes and previews load images from third-party hosts. If you connect ChatGPT, sign-in goes through auth.openai.com and requests that use your plan go to api.openai.com. No telemetry. Canvas calls go to your own Canvas instance using your existing cookies:
 
 - **Reads (GET):** dashboard cards, courses/scores/terms, planner items, assignment groups, rubrics, modules, files, announcements, course people.
 - **Writes (planner only):** mark a task complete, add a personal task (planner widget + syllabus extract). Uses Canvas's CSRF token — same as the Canvas UI. Nothing else is ever written — no grades, no quiz answers.
@@ -222,6 +226,7 @@ src/
     content.js         entry: applies registered features, wires observer + shortcuts + palette
   background/
     service-worker.js  register dynamic scripts on custom domains + badge + context menu + toolbar icon
+    chatgpt.js         ChatGPT plan sign-in, token refresh and streamed /v1/responses calls; the only code that holds tokens
   options/             standalone options page hosting the shared settings UI
 ```
 

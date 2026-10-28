@@ -1,6 +1,6 @@
 # Better Canvas privacy policy
 
-Last updated: October 22, 2026
+Last updated: October 28, 2026
 
 Better Canvas is a browser extension for Instructure Canvas. It has no servers, no accounts and no analytics. The developer doesn't receive any of your data.
 
@@ -24,6 +24,7 @@ Everything else stays in your browser's local extension storage on your device:
 - quiz answer backups. A normal quiz submit clears them, but a timed quiz that submits itself can leave one behind. Saving a backup trims the list to ten. When the quiz saver runs on a classic quiz page, it removes backups older than seven days, so a backup can stay longer if the saver doesn't run.
 - study time per course, focus sessions, reminder history, grade history and rubric estimates
 - for instructors, attendance marks
+- if you connect ChatGPT, your ChatGPT email, the model you picked and the sign-in tokens. These sit in the extension's own database, which Canvas pages and the extension's page scripts can't read, and backups don't include them. Disconnect signs Better Canvas out at OpenAI and deletes the tokens.
 
 You can export and import this data from the extension's settings. Reset puts the options back to their defaults and keeps your saved work. Uninstalling the extension deletes its local storage. It doesn't delete planner notes in Canvas or files you exported.
 
@@ -37,6 +38,7 @@ You can export and import this data from the extension's settings. Reset puts th
 - The live preview in the settings copies the current Canvas page. It may request that page's images, stylesheets, fonts, audio and video again from the same places.
 - Custom CSS, including CSS in an imported theme, can load images, fonts or stylesheets from the addresses it links to.
 - When you use Speak, Canvas text goes to your browser's speech engine. Depending on the voice, that engine may process speech online.
+- If you connect ChatGPT under Settings, ChatGPT, sign-in happens on OpenAI's own page (auth.openai.com) in a new tab. OpenAI then sends the tab to a 127.0.0.1 address, which is your own computer, and Better Canvas reads the sign-in code from it. Requests that use your ChatGPT plan go from your browser to api.openai.com. Today that is the model list and the Test message. Better Canvas never sees your ChatGPT password and can't read your ChatGPT conversations.
 
 Better Canvas doesn't sell data or show ads. Its features only send requests and text to the places listed above.
 

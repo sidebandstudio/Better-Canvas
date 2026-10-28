@@ -50,6 +50,7 @@
     { id: "accessibility", group: "Tools",   label: "Accessibility",    icon: "eye",          description: "Read-aloud, larger targets and a dyslexia-friendly font.", render: renderA11y },
     { id: "shortcuts",     group: "Tools",   label: "Shortcuts",        icon: "command",      description: "Keyboard shortcuts for everything. Click one to change it.", render: renderShortcuts },
     { id: "instructor",    group: "Tools",   label: "Instructor",       icon: "users",        description: "Helpers for teachers and TAs. Nothing is written to Canvas.", render: renderInstructor },
+    { id: "chatgpt",       group: "Tools",   label: "ChatGPT",          icon: "link",         description: "Use your own ChatGPT Plus or Pro plan in Better Canvas. Nothing goes to ChatGPT until you connect.", render: renderChatGPT },
     { id: "insights",      group: "More",    label: "Insights",         icon: "activity",     description: "Your study time, focus sessions and grade trends, kept on this device.", render: renderInsights },
     { id: "about",         group: "More",    label: "About",            icon: "info",         description: "Version, privacy, diagnostics and reset.", render: renderAbout },
   ];
@@ -1523,6 +1524,134 @@
     ];
   }
 
+  // ---- ChatGPT --------------------------------------------------------------
+
+  // Sign-in and tokens live in the background (src/background/chatgpt.js); this tab
+  // shows status and sends requests there. Only an extension page can show the
+  // permission prompt, so Connect from the Canvas drawer opens this tab in the
+  // options page when the sites aren't allowed yet. Same list as chatgpt.js ORIGINS.
+  const CHATGPT_ORIGINS = ["*://127.0.0.1/*", "https://auth.openai.com/*", "https://api.openai.com/*"];
+
+  function renderChatGPT(store, adapter, ctx) {
+    const C = S();
+    if (ctx.searching) {
+      return [sec("Use your ChatGPT plan", [row({ label: "Continue with ChatGPT", hint: "Connect your own ChatGPT Plus or Pro plan." })])];
+    }
+    const mount = el("div", { class: "bcs-chatgpt" }, [BC.ui.skeleton(3)]);
+    const send = (type, extra) => new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(Object.assign({ type }, extra || {}), (r) => resolve(chrome.runtime.lastError || !r
+          ? { ok: false, error: "Better Canvas's background didn't answer. Reload the extension and try again." } : r));
+      } catch (e) { resolve({ ok: false, error: e.message }); }
+    });
+    const canAsk = !!(globalThis.chrome && chrome.permissions && typeof chrome.permissions.request === "function");
+    const usageLink = (url, primary) => el("a", { class: "bc-btn bc-btn--sm" + (primary ? " bc-btn--primary" : " bc-btn--ghost"),
+      href: url, target: "_blank", rel: "noopener noreferrer", text: "Manage usage" });
+    let timer = null, welcomed = false, testLine = null;
+
+    async function refresh() {
+      if (!mount.isConnected && timer) { clearInterval(timer); timer = null; return; }
+      const s = await send("bc:chatgpt:status");
+      draw(s);
+      if (s.pending && !timer) timer = setInterval(refresh, 1500);
+      if (!s.pending && timer) { clearInterval(timer); timer = null; }
+      if (s.welcome && !welcomed) { welcomed = true; showWelcome(s); }
+    }
+
+    function connect(extra, granted) {
+      // permissions.request has to run straight from the click: Firefox ignores a
+      // prompt that comes after an await.
+      if (canAsk) {
+        chrome.permissions.request({ origins: CHATGPT_ORIGINS }, (ok) => {
+          if (chrome.runtime.lastError || !ok) { BC.toast && BC.toast.warn("Signing in with ChatGPT needs those sites allowed."); return; }
+          start(extra);
+        });
+      } else if (granted) start(extra);
+      else send("bc:openOptions", { section: "chatgpt" });
+    }
+    async function start(extra) {
+      const r = await send("bc:chatgpt:connect", extra);
+      if (r.needsPermission) send("bc:openOptions", { section: "chatgpt" });
+      else if (!r.ok) BC.toast && BC.toast.error(r.error);
+      refresh();
+    }
+
+    function showWelcome(s) {
+      let dlg = null;
+      const gotIt = BC.ui.button("Got it", { variant: "primary", size: "sm", onClick: () => dlg.close() });
+      dlg = BC.ui.dialog({
+        title: "You're using your ChatGPT plan",
+        body: el("p", { class: "bcs-prose", text: "Eligible requests in Better Canvas now use the usage included in your ChatGPT plan. You can review it, and limit how much Better Canvas uses, in ChatGPT settings." }),
+        actions: [usageLink(s.usageUrl), gotIt],
+        onClose: () => send("bc:chatgpt:welcomed"),
+      });
+      dlg.open();
+    }
+
+    function draw(s) {
+      if (!s.ok) { mount.replaceChildren(C.note({ text: s.error, tone: "warn" })); return; }
+      const kids = [];
+      if (s.lastError && !s.pending) {
+        kids.push(C.note({ text: s.lastError.message, tone: "warn" }));
+        if (s.lastError.manageUsage) kids.push(el("div", { class: "bcs-chatgpt__actions" }, [usageLink(s.usageUrl, true)]));
+      }
+      if (s.pending) {
+        kids.push(row({ label: "Finish signing in on the ChatGPT tab", hint: "Better Canvas opened ChatGPT's sign-in page in a new tab. It closes by itself when you're done.",
+          control: BC.ui.button("Cancel", { size: "sm", variant: "ghost", onClick: () => send("bc:chatgpt:cancel").then(refresh) }) }));
+      } else if (s.connected && s.planEnabled) {
+        kids.push(row({ label: "Using ChatGPT plan", hint: "Signed in as " + (s.email || "your ChatGPT account") + ".", control: usageLink(s.usageUrl) }));
+        const models = s.models || [];
+        kids.push(row({ label: "Model", hint: "Models your ChatGPT plan offers to apps.",
+          control: models.length
+            ? BC.ui.select({ value: s.model, size: "sm", ariaLabel: "ChatGPT model", options: models.map((m) => ({ value: m.slug, label: m.name })),
+                onChange: (v) => send("bc:chatgpt:setModel", { slug: v }).then((r) => { if (!r.ok) BC.toast && BC.toast.error(r.error); }) })
+            : BC.ui.button("Load models", { size: "sm", variant: "ghost", onClick: () => send("bc:chatgpt:models").then((r) => { if (!r.ok) BC.toast && BC.toast.error(r.error); refresh(); }) }) }));
+        testLine = el("span", { class: "bcs-chatgpt__test", role: "status" });
+        const testBtn = BC.ui.button("Test", { size: "sm", variant: "ghost", onClick: async () => {
+          testBtn.disabled = true;
+          testLine.className = "bcs-chatgpt__test";
+          testLine.textContent = "Asking ChatGPT…";
+          const r = await send("bc:chatgpt:test");
+          testBtn.disabled = false;
+          testLine.className = "bcs-chatgpt__test " + (r.ok ? "bc-t-success" : "bc-t-danger");
+          testLine.textContent = r.ok ? "ChatGPT answered: " + (r.text || "(empty)") : r.error;
+          if (!r.ok && r.manageUsage) testLine.append(" ", usageLink(r.usageUrl));
+        } });
+        kids.push(row({ label: "Check the connection", hint: "Sends one short message using your plan.", control: el("span", { class: "bcs-inline" }, [testBtn]) }), testLine);
+        kids.push(row({ label: "Disconnect", hint: "Signs Better Canvas out of ChatGPT and deletes its tokens from this browser.",
+          control: BC.ui.button("Disconnect", { size: "sm", variant: "danger", onClick: async () => {
+            const r = await send("bc:chatgpt:disconnect");
+            if (!r.ok) BC.toast && BC.toast.error(r.error);
+            else if (!r.revoked) BC.toast && BC.toast.warn("Signed out here, but ChatGPT didn't confirm it. You can also disconnect Better Canvas in ChatGPT settings.");
+            refresh();
+          } }) }));
+      } else if (s.connected) {
+        kids.push(row({ label: "ChatGPT plan use is off", hint: "Signed in as " + (s.email || "your ChatGPT account") + ", but Better Canvas wasn't allowed to use your plan.",
+          control: BC.ui.button("Turn on plan use", { size: "sm", variant: "primary", onClick: () => connect({ consent: true }, s.granted) }) }));
+        kids.push(row({ label: "Disconnect", hint: "Deletes this sign-in from this browser.",
+          control: BC.ui.button("Disconnect", { size: "sm", variant: "ghost", onClick: () => send("bc:chatgpt:disconnect").then(refresh) }) }));
+      } else {
+        const go = BC.ui.button("Continue with ChatGPT", { size: "sm", onClick: () => connect({}, s.granted) });
+        go.classList.add("bcs-chatgpt__go");
+        kids.push(row({ label: s.saved && s.email ? "Sign in as " + s.email : "Connect ChatGPT",
+          hint: "Needs ChatGPT Plus or Pro. No API key. If you log in to ChatGPT with Google, Apple or Microsoft, pick that on ChatGPT's sign-in page.",
+          control: go }));
+        if (s.saved) kids.push(row({ label: "Use a different account", hint: "Registers Better Canvas with another ChatGPT account or workspace.",
+          control: BC.ui.button("Use a different account", { size: "sm", variant: "ghost", onClick: () => connect({ different: true }, s.granted) }) }));
+      }
+      mount.replaceChildren(...kids.filter(Boolean));
+    }
+
+    refresh();
+    return [
+      sec("Use your ChatGPT plan", [mount], { description: "Complete eligible AI requests in Better Canvas with usage included in your ChatGPT plan or credits balance." }),
+      sec("What gets sent", [
+        el("p", { class: "bcs-prose", text: "Signing in opens ChatGPT's own page in a new tab, and Better Canvas never sees your password. It asks your browser to allow auth.openai.com, api.openai.com and 127.0.0.1, where ChatGPT sends you back after sign-in." }),
+        el("p", { class: "bcs-prose", text: "Requests go straight from your browser to OpenAI, not through a Better Canvas server. Tokens stay in this browser, out of reach of Canvas pages. This sign-in can't read your ChatGPT conversations, memories or files." }),
+      ]),
+    ];
+  }
+
   // ---- Insights -------------------------------------------------------------
 
   function renderInsights(store, adapter, ctx) {
@@ -1613,7 +1742,7 @@
     return [
       sec("Better Canvas " + (BC.VERSION || ""), [
         el("p", { class: "bcs-prose", text: "Better Canvas customizes Canvas with dark mode, a redesigned dashboard, a planner, grade tools, notifications, keyboard shortcuts and more — all set up from this panel." }),
-        el("p", { class: "bcs-prose", text: "Settings, notes and drafts stay on this device. Canvas tools use your existing Canvas login. Image searches send your query to api.openverse.org. Photo themes and previews load images from third-party hosts. No telemetry." }),
+        el("p", { class: "bcs-prose", text: "Settings, notes and drafts stay on this device. Canvas tools use your existing Canvas login. Image searches send your query to api.openverse.org. Photo themes and previews load images from third-party hosts. If you connect ChatGPT, requests that use your plan go to OpenAI. No telemetry." }),
       ]),
       renderDiagnostics(),
       sec("Reset", [
@@ -1818,6 +1947,11 @@
 .bcs-note--warn { background: var(--bc-warn-bg, #fffbeb); }
 .bcs-note--warn .bc-icon { color: var(--bc-warn, #a16207); }
 .bcs-empty { font-size: var(--bc-text-sm, 13px); color: var(--bc-muted, #6b6b74); padding: var(--bc-space-2, 8px) 0; }
+/* OpenAI's sign-in guidelines show Continue with ChatGPT as a black button. */
+.bcs-chatgpt__go, .bcs-chatgpt__go:hover { background: #000; border-color: #000; color: #fff; }
+.bcs-chatgpt__test { display: block; font-size: var(--bc-text-sm, 13px); padding: 0 0 var(--bc-space-2, 8px); }
+.bcs-chatgpt__test:empty { display: none; }
+.bcs-chatgpt__actions { display: flex; gap: var(--bc-space-2, 8px); margin-top: var(--bc-space-2, 8px); }
 .bcs-prose { font-size: var(--bc-text-sm, 13px); line-height: 1.55; color: var(--bc-text, #18181b); margin: var(--bc-space-3, 12px) 0 0 !important; }
 
 /* small layout helpers */
