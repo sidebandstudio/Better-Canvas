@@ -250,7 +250,8 @@
     // Adding a session to the planner takes three steps: claim it here, create the
     // Canvas note, then record the note. A claim stops a second tab from adding
     // the same session, and lapses after two minutes if its tab never finishes.
-    // Only the tab holding a claim, by its token, can record or release it.
+    // The first note recorded wins, so a tab whose claim lapsed while Canvas was
+    // slow learns whether its note is the one kept. Only the holder can release.
     const CLAIM_MS = 120e3;
     const claimAt = (v) => Number(String(v).split(":")[1]) || 0;
     const owns = (v, token) => isClaim(v) && String(v).split(":")[2] === String(token);
@@ -277,13 +278,16 @@
       return { ok: true, token: String(data.seq), reclaimed: abandoned };
     });
     const added = (origin, msg) => session(origin, msg, (rec, i) => {
-      if (!isId(msg.noteId) || !owns(rec.added[i], msg.token)) return { ok: false, code: "taken" };
-      rec.added[i] = String(msg.noteId);
-      return { ok: true };
+      const v = rec.added[i];
+      if (!isId(msg.noteId) || !v) return { ok: false, code: "taken" };
+      if (isClaim(v)) { rec.added[i] = String(msg.noteId); return { ok: true }; }
+      return v === String(msg.noteId) ? { ok: true } : { ok: false, code: "taken" };
     });
+    // Released, the session is marked abandoned, not cleared. A failed POST may
+    // still have saved the note, so whoever claims it next looks for it first.
     const release = (origin, msg) => session(origin, msg, (rec, i) => {
       if (!owns(rec.added[i], msg.token)) return { ok: false };
-      delete rec.added[i];
+      rec.added[i] = "claim:0:" + msg.token;
       return { ok: true };
     });
 

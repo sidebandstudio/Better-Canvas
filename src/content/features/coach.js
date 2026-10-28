@@ -395,28 +395,33 @@
         if (!claim.ok) { if (claim.code === "taken") continue; throw new Error(claim.error || "The plan changed"); }
         const mine = Object.assign(which(i), { token: claim.token });
         const title = plain(x.task, rec.links).slice(0, 200), when = sessionStart(x);
-        let note = claim.reclaimed ? await findNote(c.id, title, when).catch(() => null) : null;
-        const made = !note;
-        if (!note) {
-          try {
+        let note = null, made = false;
+        try {
+          // A lookup that fails proves nothing, so it stops here rather than make a copy.
+          if (claim.reclaimed) note = await findNote(c.id, title, when);
+          if (!note) {
+            made = true;
             note = await BC.api.createPlannerNote({
               title, todoDate: when.toISOString(), courseId: c.id,
               details: "Study session from Better Canvas's study coach" + (rec.focusName ? " for " + rec.focusName : "") + ".",
             });
             if (!note || note.id == null) throw new Error("Canvas didn't return the new planner item");
-          } catch (err) {
-            const back = await send("bc:coach:release", mine);
-            if (back.record) { rec = back.record; state.plans.set(c.id, rec); }
-            throw err;
           }
+        } catch (err) {
+          const back = await send("bc:coach:release", mine);
+          if (back.record) { rec = back.record; state.plans.set(c.id, rec); }
+          throw err;
         }
         // The note exists now. Record it before anything else can fail.
         const r = await send("bc:coach:added", Object.assign(mine, { noteId: String(note.id) }));
         if (r.record) { rec = r.record; state.plans.set(c.id, rec); }
         if (!r.ok) {
-          // Canvas was slow, the claim lapsed and another tab took the session
-          // over, so this note would be a second copy.
-          if (made && r.code === "taken") await BC.api.deletePlannerNote(note.id).catch((err) => BC.diag.push("coach:planner", err));
+          // This tab's claim lapsed while Canvas was slow, and another tab recorded
+          // a different note for the session, so this one is a second copy.
+          const kept = r.record && r.record.added[i];
+          if (made && r.code === "taken" && kept && kept !== String(note.id) && !String(kept).startsWith("claim:")) {
+            await BC.api.deletePlannerNote(note.id).catch((err) => BC.diag.push("coach:planner", err));
+          }
           continue;
         }
         await BC.storage.updateLocal((d) => {

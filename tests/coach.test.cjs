@@ -54,7 +54,7 @@ const record = (extra) => Object.assign({ plan: { summary: "s", sessions: [], ca
 
 // A fake background that keeps plans, consent and claims the way coach.js does.
 function page({ connected = false, courses = [cs3500(), engw()], plans = {}, consent = {}, respond, takenByOtherTab, failNote, modules,
-  reclaimed, existing = [], takenOver } = {}) {
+  reclaimed, existing = [], takenOver, lookupFails } = {}) {
   const { dom, context } = domContext('<div id="dash"><div id="DashboardCard_Container"></div></div>');
   const sent = [], notes = [], deleted = [];
   let clock = NOW, seq = 0;
@@ -79,11 +79,12 @@ function page({ connected = false, courses = [cs3500(), engw()], plans = {}, con
       return { ok: true, token: String(seq), reclaimed: reclaimed === msg.index, record: rec };
     }
     if (msg.type === "bc:coach:added") {
-      if (takenOver === msg.index) { rec.added[msg.index] = "claim:" + clock + ":other"; return { ok: false, code: "taken", record: rec }; }
-      if (!mine()) return { ok: false, code: "taken", record: rec };
-      rec.added[msg.index] = msg.noteId; return { ok: true, record: rec };
+      if (takenOver && takenOver[msg.index]) rec.added[msg.index] = takenOver[msg.index];
+      const v = rec.added[msg.index];
+      if (String(v).startsWith("claim:")) { rec.added[msg.index] = msg.noteId; return { ok: true, record: rec }; }
+      return v === msg.noteId ? { ok: true, record: rec } : { ok: false, code: "taken", record: rec };
     }
-    if (msg.type === "bc:coach:release") { if (mine()) delete rec.added[msg.index]; return { ok: true, record: rec }; }
+    if (msg.type === "bc:coach:release") { if (mine()) rec.added[msg.index] = "claim:0:" + msg.token; return { ok: true, record: rec }; }
     return { ok: true };
   };
   context.chrome = { runtime: { lastError: undefined, sendMessage: (msg, cb) => setTimeout(() => reply(plain(msg)).then((r) => cb(plain(r)))) } };
@@ -111,7 +112,7 @@ function page({ connected = false, courses = [cs3500(), engw()], plans = {}, con
       notes.push(n); return { id: String(900 + notes.length) };
     },
     deletePlannerNote: async (id) => { deleted.push(id); },
-    getList: async (url) => { sent.push({ type: "GET " + url.split("?")[0] }); return existing; },
+    getList: async (url) => { sent.push({ type: "GET " + url.split("?")[0] }); if (lookupFails) throw new Error("Canvas 503"); return existing; },
   };
   load(context, "src/content/features/coach.js");
   const apply = () => BC.features.coach.apply(settings, { page: "dashboard" });
@@ -347,7 +348,7 @@ test("Add to planner claims each upcoming session, then makes one Canvas planner
   } finally { p.dom.window.close(); }
 });
 
-test("a session another tab claimed isn't added twice, and a failed note gives its claim back", async () => {
+test("a session another tab claimed isn't added twice, and a failed note releases its claim", async () => {
   let p = page({ connected: true, consent: { 1: true }, plans: twoSessions(), takenByOtherTab: 2 });
   try {
     p.settings.coach.autoUpdate = false;
@@ -364,7 +365,8 @@ test("a session another tab claimed isn't added twice, and a failed note gives i
     p.button("Add to planner").click(); await p.flush();
     assert.equal(p.notes.length, 1);
     assert.deepEqual(p.sent.filter((m) => m.type === "bc:coach:release").map((m) => m.index), [2]);
-    assert.deepEqual(plain(p.bg.plans[1].added), { 1: "901" });
+    assert.equal(p.bg.plans[1].added[1], "901");
+    assert.match(String(p.bg.plans[1].added[2]), /^claim:0:/, "released, and checked for a note next time");
     assert.match(p.text(), /Added 1 of 2 sessions\. Canvas didn't save the rest\./);
     assert.ok(p.button("Add the rest to planner"));
   } finally { p.dom.window.close(); }
@@ -382,15 +384,39 @@ test("taking over an abandoned claim reuses its note, and a note made after losi
     assert.deepEqual(p.notes.map((n) => n.title), ["Read"], "session 1 wasn't made again");
     assert.deepEqual(plain(p.bg.plans[1].added), { 1: "800", 2: "901" });
   } finally { p.dom.window.close(); }
-  // Canvas was slow, this tab's claim lapsed, and another tab took session 1.
-  p = page({ connected: true, consent: { 1: true }, plans: twoSessions(), takenOver: 1 });
+  // Canvas was slow, this tab's claim lapsed, and another tab recorded its own note.
+  p = page({ connected: true, consent: { 1: true }, plans: twoSessions(), takenOver: { 1: "799" } });
   try {
     p.settings.coach.autoUpdate = false;
     p.BC.coach.trusted = () => true;
     p.apply(); await p.flush();
     p.button("Add to planner").click(); await p.flush();
     assert.deepEqual(plain(p.deleted), ["901"], "its second copy is deleted");
+    assert.equal(p.bg.plans[1].added[1], "799");
     assert.equal(p.bg.plans[1].added[2], "902");
+  } finally { p.dom.window.close(); }
+  // The other tab found this tab's note and recorded it, so it stays.
+  p = page({ connected: true, consent: { 1: true }, plans: twoSessions(), takenOver: { 1: "901" } });
+  try {
+    p.settings.coach.autoUpdate = false;
+    p.BC.coach.trusted = () => true;
+    p.apply(); await p.flush();
+    p.button("Add to planner").click(); await p.flush();
+    assert.deepEqual(plain(p.deleted), []);
+    assert.equal(p.bg.plans[1].added[1], "901");
+  } finally { p.dom.window.close(); }
+});
+
+test("when Canvas can't say whether an abandoned session's note exists, nothing new is made", async () => {
+  const p = page({ connected: true, consent: { 1: true }, plans: twoSessions(), reclaimed: 1, lookupFails: true });
+  try {
+    p.settings.coach.autoUpdate = false;
+    p.BC.coach.trusted = () => true;
+    p.apply(); await p.flush();
+    p.button("Add to planner").click(); await p.flush();
+    assert.equal(p.notes.length, 0);
+    assert.match(String(p.bg.plans[1].added[1]), /^claim:0:/, "still marked for a check next time");
+    assert.match(p.text(), /Canvas didn't save the rest\. Try again\./);
   } finally { p.dom.window.close(); }
 });
 
@@ -651,18 +677,21 @@ test("each session goes to the planner once: claim, then record the note", async
   assert.equal((await send("bc:coach:release", { token: "nope" })).ok, false, "only the holder releases");
   assert.equal((await send("bc:coach:release", { token: first.token })).ok, true);
   const a = await send("bc:coach:claim");
+  assert.equal(a.reclaimed, true, "a released session is checked for a note before another is made");
   b.tick(121e3);
   const bTab = await send("bc:coach:claim");
   assert.equal(bTab.ok, true, "a claim its tab abandoned lapses");
   assert.equal(bTab.reclaimed, true, "and the new holder is told to look for its note");
   assert.equal((await send("bc:coach:release", { token: a.token })).ok, false, "the old holder can't release it");
-  assert.equal((await send("bc:coach:added", { token: a.token, noteId: "900" })).code, "taken", "or record over it");
+  // The slow tab's note lands first and is kept; the new holder's copy isn't.
+  assert.equal((await send("bc:coach:added", { token: a.token, noteId: "900" })).ok, true);
   const r = await send("bc:coach:added", { token: bTab.token, noteId: "901" });
-  assert.equal(r.ok, true);
-  assert.deepEqual(plain(r.record.added), { 0: "901" });
+  assert.equal(r.code, "taken");
+  assert.deepEqual(plain(r.record.added), { 0: "900" });
+  assert.equal((await send("bc:coach:added", { token: bTab.token, noteId: "900" })).ok, true, "recording the kept note again is fine");
   assert.equal((await send("bc:coach:claim")).code, "taken");
   const listed = await b.ask({ type: "bc:coach:plans", user: "77", courseIds: ["1", "2"] });
-  assert.deepEqual(plain(listed.plans["1"].record.added), { 0: "901" });
+  assert.deepEqual(plain(listed.plans["1"].record.added), { 0: "900" });
   assert.equal(listed.plans["2"].record, null);
   // A different Canvas site sees nothing.
   const other = await b.ask({ type: "bc:coach:plans", user: "77", courseIds: ["1"] }, { id: "ext", tab: { id: 1 }, url: "https://other.instructure.com/" });
