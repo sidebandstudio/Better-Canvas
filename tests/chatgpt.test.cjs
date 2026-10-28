@@ -41,7 +41,7 @@ async function harness(opts = {}) {
   let clock = 1_800_000_000_000;
   const world = {
     granted: true, sub: "user-1", email: "student@example.edu", scope: "chatgpt.tokens.use.direct email offline_access openid profile resource.invoke",
-    refreshCount: 0, tokenStatus: 200, tokenError: null, refreshError: null, revokeStatus: 200, hold: null,
+    refreshCount: 0, tokenStatus: 200, tokenError: null, refreshError: null, revokeStatus: 200, hold: null, stall: null,
     responses: () => new Response(sse([{ type: "response.output_text.delta", delta: "Connected" }, { type: "response.completed", response: {} }]), { status: 200 }),
     idClaims: {},
   };
@@ -49,6 +49,10 @@ async function harness(opts = {}) {
   async function fetch(url, init = {}) {
     const form = init.body instanceof URLSearchParams ? Object.fromEntries(init.body) : null;
     calls.push({ url, method: init.method || "GET", form, body: typeof init.body === "string" ? JSON.parse(init.body) : null, headers: init.headers || {} });
+    // Headers arrive but the body never finishes, until the request's time limit errors it.
+    if (world.stall && world.stall.test(url)) {
+      return new Response(new ReadableStream({ start(c) { init.signal.addEventListener("abort", () => c.error(init.signal.reason)); } }), { status: 200 });
+    }
     if (url === "https://auth.openai.com/.well-known/openid-configuration") {
       return json({ jwks_uri: "https://auth.openai.com/jwks", revocation_endpoint: "https://auth.openai.com/oauth/revoke" });
     }
@@ -478,6 +482,18 @@ test("a hung exchange times out and frees Disconnect, and a late one isn't kept"
   assert.equal(s.connected, false);
   assert.equal(s.lastError.code, "interrupted");
   assert.equal(h.calls.find((c) => c.url.endsWith("/oauth/revoke")).form.token, "refresh-1");
+});
+
+test("a body that stops arriving counts as a timeout, during discovery and the exchange", async () => {
+  for (const stall of [/openid-configuration/, /oauth\/token/]) {
+    const h = await harness({ requestMs: 30 });
+    h.world.stall = stall;
+    await h.connect();
+    await h.callback({ code: "c", client_id: "oaiapp_1" });
+    const s = await h.service.status();
+    assert.equal(s.lastError && s.lastError.code, "timeout", String(stall));
+    assert.equal(s.connected, false);
+  }
 });
 
 test("two accounts with one email keep their labels when either signs in again", async () => {

@@ -223,15 +223,15 @@
   function create({ chrome, fetch, store, crypto, now = () => Date.now(), wait = (ms) => new Promise((r) => setTimeout(r, ms)), requestMs = 15000 }) {
     // Every sign-in request has a time limit, so a hung one can't hold the turn
     // below and leave Disconnect waiting. Three of them fit inside FINISHING_MS.
+    const late = (e) => e && (e.name === "TimeoutError" || e.name === "AbortError");
+    const tooSlow = () => fail("ChatGPT took too long to answer. Try again.", { code: "timeout", retry: true });
     async function timed(url, init) {
       try { return await fetch(url, Object.assign({ signal: AbortSignal.timeout(requestMs) }, init)); }
-      catch (e) {
-        if (e && (e.name === "TimeoutError" || e.name === "AbortError")) throw fail("ChatGPT took too long to answer. Try again.", { code: "timeout", retry: true });
-        throw e;
-      }
+      catch (e) { throw late(e) ? tooSlow() : e; }
     }
     const post = (url, form) => timed(url, { method: "POST", body: new URLSearchParams(form), credentials: "omit", referrerPolicy: "no-referrer" });
-    const json = (r) => r.json().catch(() => null);
+    // The time limit also covers reading the body.
+    const json = (r) => r.json().catch((e) => { if (late(e)) throw tooSlow(); return null; });
     let discovery = null, jwks = null, refreshing = null;
     const handling = new Set();
     // Sign-in, refresh and disconnect take turns, so Disconnect can't be undone by
@@ -243,15 +243,17 @@
     async function getDiscovery() {
       if (discovery) return discovery;
       const r = await timed(DISCOVERY_URL, { credentials: "omit" });
-      if (!r.ok) throw fail("Couldn't reach ChatGPT sign-in. Try again.", { code: "discovery_" + r.status, retry: true });
-      return (discovery = await r.json());
+      const body = r.ok ? await json(r) : null;
+      if (!body || !body.jwks_uri) throw fail("Couldn't reach ChatGPT sign-in. Try again.", { code: "discovery_" + r.status, retry: true });
+      return (discovery = body);
     }
     async function getJwks(kid) {
       if (jwks && jwks.keys.some((k) => k.kid === kid)) return jwks;
       const d = await getDiscovery();
       const r = await timed(d.jwks_uri, { credentials: "omit" });
-      if (!r.ok) throw fail("Couldn't load ChatGPT's signing keys. Try again.", { code: "jwks_" + r.status, retry: true });
-      return (jwks = await r.json());
+      const body = r.ok ? await json(r) : null;
+      if (!body || !Array.isArray(body.keys)) throw fail("Couldn't load ChatGPT's signing keys. Try again.", { code: "jwks_" + r.status, retry: true });
+      return (jwks = body);
     }
 
     async function hostId() {
