@@ -166,12 +166,16 @@
     delete baseTheming.rotation;
     const accessibility = {};
     for (const key of BC.THEME_KEEPS) {
-      if (!src.theming || !(key in src.theming)) accessibility[key] = target.theming[key];
+      // Copy objects, because the merge below resets them in place.
+      const value = target.theming[key];
+      if (!src.theming || !(key in src.theming)) accessibility[key] = value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value;
     }
+    const customCss = target.cosmetics.customCss;
     merge(target.theming, baseTheming);
     merge(target.cosmetics, BC.defaults.cosmetics);
     merge(target, src);
     Object.assign(target.theming, accessibility);
+    if (!src.cosmetics || !("customCss" in src.cosmetics)) target.cosmetics.customCss = customCss;
     target.dashboard.themeImages = BC.themeImages(src.dashboard && src.dashboard.themeImages);
     for (const course of Object.values(target.dashboard.courses || {})) {
       if (!course || typeof course !== "object") continue;

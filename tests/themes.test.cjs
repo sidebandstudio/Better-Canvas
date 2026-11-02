@@ -161,6 +161,21 @@ test("full themes reset completely to defaults, preserve course preferences and 
   assert.deepEqual(copy(s.dashboard.courseOrder), ["3", "2"]);
 });
 
+test("applying a theme keeps custom CSS, the logo choice, sidebar width and dark schedule", () => {
+  const { BC } = context(), s = BC.cloneDefaults();
+  s.cosmetics.customCss = "a{color:red}";
+  s.theming.logo = { mode: "text", url: "", text: "NEU" };
+  s.theming.sidebarWidth = 220;
+  s.theming.darkSchedule = { start: "18:00", end: "06:30" };
+  for (const id of ["scene-gallery", "bc-default"]) BC.applyTheme(s, BC.PRESET_THEMES.find((p) => p.id === id));
+  assert.equal(s.cosmetics.customCss, "a{color:red}");
+  assert.deepEqual(copy(s.theming.logo), { mode: "text", url: "", text: "NEU" });
+  assert.equal(s.theming.sidebarWidth, 220);
+  assert.deepEqual(copy(s.theming.darkSchedule), { start: "18:00", end: "06:30" });
+  BC.applyTheme(s, { settings: { cosmetics: { customCss: "b{color:blue}" } } });
+  assert.equal(s.cosmetics.customCss, "b{color:blue}");
+});
+
 test("automatic rotation applies image collections without disabling future rotation", async () => {
   const ctx = context(), { BC } = ctx, state = BC.cloneDefaults();
   const theme = BC.PRESET_THEMES.find((p) => p.name === "Deep Space");

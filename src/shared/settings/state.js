@@ -256,7 +256,10 @@
         const preserved = BC.THEME_KEEPS;
         const paths = Object.keys(BC.defaults.theming).filter((key) => key !== "rotation" &&
           (!preserved.includes(key) || Object.hasOwn(src.theming || {}, key))).map((key) => ["theming", key]);
-        paths.push(["cosmetics"], ["dashboard", "themeImages"], ["dashboard", "courses", "*", "bgImage"], ["dashboard", "courses", "*", "bgGradient"]);
+        for (const key of Object.keys(BC.defaults.cosmetics)) {
+          if (key !== "customCss" || Object.hasOwn(src.cosmetics || {}, key)) paths.push(["cosmetics", key]);
+        }
+        paths.push(["dashboard", "themeImages"], ["dashboard", "courses", "*", "bgImage"], ["dashboard", "courses", "*", "bgGradient"]);
         set((d) => {
           if (BC.applyTheme) { BC.applyTheme(d, preset); return; }
           const src = BC.cleanData(preset.settings || preset);
