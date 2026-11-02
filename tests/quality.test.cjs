@@ -164,17 +164,33 @@ test("two tabs finishing the same focus phase start the break once", async () =>
   } finally { a.page.dom.window.close(); b.page.dom.window.close(); }
 });
 
-async function plannerContext() {
+async function plannerContext(now) {
   const { database } = require("./storage-harness.cjs");
   const { domContext, load: loadDom } = require("./audit-helpers.cjs");
   const db = database({ bcLocal: {} }), client = db.client(), page = domContext("", { chrome: client.chrome });
+  if (now) vm.runInContext(`(() => { const R = Date, fixed = ${new Date(now).getTime()};
+    class D extends R { constructor(...a) { if (a.length) super(...a); else super(fixed); } static now() { return fixed; } }
+    globalThis.Date = D; })()`, page.context);
   loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/color.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
   const BC = page.context.BC;
   await BC.storage.load(); await BC.storage.loadLocal();
   vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8")
-    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus };\n  BC.registry.register({"), page.context);
+    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus, defaultStart, rangeDays, fetchWindow, buildModel };\n  BC.registry.register({"), page.context);
   return { BC, page };
 }
+
+test("a planner window shorter than a week still holds today", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T15:00:00"); // a Friday
+  try {
+    for (const startOn of ["monday", "sunday"]) {
+      const t = { ...BC.storage.current.todo, startOn, rangeDays: 3, view: "list" };
+      const start = BC.test.defaultStart(t), end = BC.dt.addDays(start, BC.test.rangeDays(t)), today = new Date(2026, 10, 6);
+      assert.ok(start <= today && end > today, startOn + " " + BC.dt.ymd(start));
+    }
+    const week = { ...BC.storage.current.todo, startOn: "monday", rangeDays: 7, view: "list" };
+    assert.equal(BC.dt.ymd(BC.test.defaultStart(week)), "2026-11-02");
+  } finally { page.dom.window.close(); }
+});
 
 test("recurring tasks clamp to short months and start on the day they were made", async () => {
   const { BC, page } = await plannerContext();

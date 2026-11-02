@@ -587,9 +587,11 @@
   function defaultStart(t) {
     const today = BC.dt.startOfDay(new Date());
     if (viewOf(t) === "timeblock") return today;
-    if (t.startOn === "sunday") return BC.dt.startOfWeek(today, false);
-    if (t.startOn === "monday") return BC.dt.startOfWeek(today, true);
-    return today;
+    if (t.startOn !== "sunday" && t.startOn !== "monday") return today;
+    // A window shorter than a week steps on from the week's start until it holds
+    // today. Otherwise "Show 3 days" left today out from Thursday on.
+    const week = BC.dt.startOfWeek(today, t.startOn === "monday"), n = rangeDays(t);
+    return BC.dt.addDays(week, Math.floor(Math.round((today - week) / BC.dt.DAY_MS) / n) * n);
   }
   function windowStart(t) {
     return state.windowStart ? BC.dt.startOfDay(state.windowStart) : defaultStart(t);
