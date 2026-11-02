@@ -40,3 +40,10 @@ test("weighted totals use group scores after dropping and renormalize groups wit
     { group_weight: 20, assignments: [assignment(4, null, 10)] },
   ]), 75);
 });
+test("weights adding up to more than 100 count as extra credit instead of being scaled down", () => {
+  assert.ok(Math.abs(total([
+    { group_weight: 40, assignments: [assignment(1, 9, 10)] },
+    { group_weight: 60, assignments: [assignment(2, 8, 10)] },
+    { group_weight: 5, assignments: [assignment(3, 10, 10)] },
+  ]) - 89) < 1e-10);
+});

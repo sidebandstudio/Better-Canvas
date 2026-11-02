@@ -98,6 +98,8 @@
         if (poss > 0) { earned += pts / poss * (group.group_weight || 0); possible += group.group_weight || 0; }
       } else { earned += pts; possible += poss; }
     }
+    // Like Canvas, weights only scale up when the graded groups add to under 100.
+    if (weighted && possible >= 100) return earned;
     return possible > 0 ? earned / possible * 100 : null;
   };
 
