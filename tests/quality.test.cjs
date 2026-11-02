@@ -378,6 +378,26 @@ test("grade tools show Canvas's current score and keep the final-exam inputs thr
   } finally { dom.window.close(); }
 });
 
+test("the grade trend ends at today's current grade, not an earlier score from today", async () => {
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="main"><div id="grades_summary"></div></div>');
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/ui.js", "src/content/core/lifecycle.js");
+    const BC = context.BC, nodes = new Map();
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
+    BC.registry = { register(feature) { BC.feature = feature; } };
+    BC.api = { assignmentGroups: async () => [{ assignments: [] }], coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 95 }] }] };
+    const today = BC.dt.ymd(new Date()), yesterday = BC.dt.ymd(BC.dt.addDays(new Date(), -1));
+    BC.storage = { local: { gradeHistory: { 7: [{ date: yesterday, score: 80 }, { date: today, score: 90 }] } }, updateLocal: async () => {}, update: async () => {} };
+    loadDom(context, "src/content/features/grades.js");
+    const settings = BC.cloneDefaults(); settings.grades.autoRefresh = false;
+    BC.feature.apply(settings, { page: "grades", courseId: "7", path: "/courses/7/grades" }); await settle(); await settle();
+    const meta = dom.window.document.querySelector(".bc-gt-trend-meta").textContent;
+    assert.match(meta, /max 95\.0%/);
+    assert.match(meta, /\+15\.0%/);
+  } finally { dom.window.close(); }
+});
+
 test("scene themes store short references, resolve when painted and compact old data URIs", () => {
   const ctx = vm.createContext({ URL, console, setTimeout, clearTimeout, structuredClone, navigator: { platform: "Win32" }, chrome: { runtime: { getURL: (s) => "chrome-extension://x/" + s } } });
   for (const file of ["src/shared/defaults.js", "src/content/core/util.js", "src/shared/themes.js", "src/shared/theme-library.js", "src/shared/theme-scenes.js", "src/shared/theme-artwork.js", "src/shared/theme-media.js"]) load(ctx, file);

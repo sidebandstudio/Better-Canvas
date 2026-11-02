@@ -110,6 +110,8 @@ test("failed grade history writes can retry on the next score observation", asyn
   await BC.grades.recordScore("7", 91);
   assert.equal(db.data.bcLocal.gradeHistory[7].length, 1);
   assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 91, "a later grade the same day replaces the morning's");
+  await BC.grades.recordScore("7", 90);
+  assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 90, "a score seen earlier today can be the latest again");
 });
 
 test("the rubric predictor starts from the graded rubric on the assignment's submission", async () => {

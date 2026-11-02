@@ -229,12 +229,10 @@
 
       recordHistory(courseId, total);
 
-      // History plus a virtual point for today (the write above lands async).
+      // History with today's point set to this total (the write above lands async).
       let hist = ((BC.storage.local && BC.storage.local.gradeHistory) || {})[courseId] || [];
       const today = BC.dt.ymd(new Date());
-      if (total != null && !hist.some((e) => e.date === today)) {
-        hist = hist.concat([{ date: today, score: +total.toFixed(3) }]);
-      }
+      if (total != null) hist = hist.filter((e) => e.date !== today).concat([{ date: today, score: +total.toFixed(3) }]);
 
       // Skip the rebuild when nothing changed or while the user is typing in the panel.
       const sig = [courseId, total == null ? "" : total.toFixed(3), estimated ? 1 : 0, goal, missing.length, hist.length,
@@ -421,10 +419,6 @@
     });
   }
 
-  // Keyed by course, day AND score: a Set of course ids alone meant a tab left open
-  // across midnight never recorded the new day's score, and a grade posted later
-  // the same day never replaced the morning's.
-  const historyRecorded = new Set();
   // Exported so the background notification scan can record history for EVERY
   // course, not just ones whose grades page happens to get visited. That single
   // caller is what makes the trend chart, dashboard sparklines and the Insights tab
@@ -436,19 +430,18 @@
     if (total == null) return;
     const today = BC.dt.ymd(new Date());
     const score = +total.toFixed(3);
-    const key = courseId + ":" + today + ":" + score;
-    if (historyRecorded.has(key)) return;
     // Today's point is usually there already, from an earlier page. Each page load
-    // used to make a storage round trip per course to find that out.
+    // used to make a storage round trip per course to find that out. Other tabs
+    // keep it current, so a grade posted later the same day still replaces it.
     const known = ((BC.storage.local && BC.storage.local.gradeHistory) || {})[courseId];
-    if (Array.isArray(known) && known.some((e) => e.date === today && e.score === score)) { historyRecorded.add(key); return; }
+    if (Array.isArray(known) && known.some((e) => e.date === today && e.score === score)) return;
     return BC.storage.updateLocal((d) => {
       const gh = (d.gradeHistory = d.gradeHistory || {});
       const arr = gh[courseId] || [];
       const entry = arr.find((e) => e.date === today);
       if (entry) entry.score = score; else arr.push({ date: today, score });
       gh[courseId] = arr.slice(-90);
-    }).then(() => { historyRecorded.add(key); }).catch(() => {});
+    }).catch(() => {});
   }
 
   function apply(settings, ctx) {
