@@ -2033,7 +2033,8 @@
     BC.storage.updateLocal((d) => {
       const prev = d.pomodoro || {};
       d.pomodoro = {
-        phase: "work", cycle: prev.cycle || 0,
+        // A stopped timer starts a new set, so its long break isn't early.
+        phase: "work", cycle: prev.phase ? prev.cycle || 0 : 0,
         startedAt: Date.now(), endsAt: Date.now() + min * 60000,
         taskTitle: taskTitle || "", sessions: prev.sessions || [],
       };

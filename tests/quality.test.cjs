@@ -164,6 +164,25 @@ test("two tabs finishing the same focus phase start the break once", async () =>
   } finally { a.page.dom.window.close(); b.page.dom.window.close(); }
 });
 
+test("starting focus after a stop begins a new set instead of an early long break", async () => {
+  const { database } = require("./storage-harness.cjs");
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const db = database({ bcLocal: { pomodoro: { phase: null, cycle: 3, sessions: [], taskTitle: "" } } });
+  const page = domContext("", { chrome: db.client().chrome });
+  loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/color.js", "src/content/core/icons.js", "src/content/core/injector.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
+  const BC = page.context.BC;
+  try {
+    await BC.storage.load(); await BC.storage.loadLocal();
+    BC.toast = { success() {}, error() {}, info() {} };
+    vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8")
+      .replace("  BC.registry.register({", "  BC.testStart = startPomodoro;\n  BC.registry.register({"), page.context);
+    BC.testStart(BC.storage.current, "Essay");
+    for (let i = 0; i < 6; i++) await settle();
+    assert.equal(db.data.bcLocal.pomodoro.phase, "work");
+    assert.equal(db.data.bcLocal.pomodoro.cycle, 0);
+  } finally { page.dom.window.close(); }
+});
+
 async function plannerContext(now) {
   const { database } = require("./storage-harness.cjs");
   const { domContext, load: loadDom } = require("./audit-helpers.cjs");
