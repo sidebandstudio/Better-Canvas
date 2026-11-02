@@ -543,7 +543,11 @@
       more.classList.add("bcs-theme__more");
       more.addEventListener("click", () => BC.ui.menu(more, [
         { label: "Export file", icon: "download", onClick: () => downloadTheme(p) },
-        { label: "Delete", icon: "trash", danger: true, onClick: () => store.set((x) => { x.customThemes = (x.customThemes || []).filter((q) => q.id !== p.id); }) },
+        { label: "Delete", icon: "trash", danger: true, onClick: () => store.set((x) => {
+          x.customThemes = (x.customThemes || []).filter((q) => q.id !== p.id);
+          const rotation = x.theming.rotation;
+          if (Array.isArray(rotation?.themeIds)) rotation.themeIds = rotation.themeIds.filter((id) => id !== p.id);
+        }) },
       ]));
       card.appendChild(more);
     }

@@ -179,6 +179,18 @@ test("automatic rotation applies image collections without disabling future rota
   assert.equal(writes, 1);
 });
 
+test("rotation to a deleted saved theme writes once and then waits for the next period", async () => {
+  const ctx = context(), { BC } = ctx, state = BC.cloneDefaults();
+  state.theming.rotation = { enabled: true, mode: "daily", themeIds: ["u-deleted"] };
+  let feature, writes = 0;
+  BC.registry = { register: (f) => { feature = f; } };
+  BC.storage = { local: {}, updateLocal: async (fn) => fn(BC.storage.local), update: async (fn) => { writes++; fn(state); } };
+  BC.toast = { info() {} }; BC.diag = { push(_, e) { throw e; } };
+  vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/rotation.js"), "utf8"), ctx);
+  for (let i = 0; i < 3; i++) { feature.apply(state); await new Promise((r) => setImmediate(r)); }
+  assert.equal(writes, 1);
+});
+
 function background(fetch) {
   const handlers = [];
   const event = { addListener() {} };

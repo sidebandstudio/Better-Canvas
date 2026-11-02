@@ -55,7 +55,9 @@
       BC.applyTheme(d, theme);
       applied = { period: (rotation.mode || "daily") + ":" + index, themeId: id, name: theme.name || id };
     }).then(() => {
-        if (!applied) return;
+        // A deleted saved theme leaves its id behind. Without this the unchanged
+        // commit re-ran applyAll, which landed here again several times a second.
+        if (!applied) { failedPeriod = period; return; }
         return BC.storage.updateLocal((d) => { d.lastRotation = { period: applied.period, themeId: applied.themeId }; })
           .then(() => BC.toast.info("Theme rotated: " + applied.name));
       })
