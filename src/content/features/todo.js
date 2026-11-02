@@ -517,6 +517,9 @@
     assessment_request: "users",
   };
   const typeKey = (it) => (it.plannable_type === "bc_recurring" ? "planner_note" : it.plannable_type);
+  // Lectures, office hours and announcements aren't work that comes due, so they
+  // are never overdue.
+  const notDue = (it) => it.plannable_type === "calendar_event" || it.plannable_type === "announcement";
   const itemTitle = (it) => (it.plannable && it.plannable.title) || it.plannable_title || "Untitled";
   // Canvas gives relative paths; anything else must at least be http(s).
   function itemUrl(it) {
@@ -731,7 +734,7 @@
         m.expired.push(k);
       }
       if (d >= r.start && d < r.end) m.windowItems.push(it);
-      else if (r.overdue && d < r.start && !isComplete(it)) m.overdue.push(it);
+      else if (r.overdue && d < r.start && !isComplete(it) && !notDue(it)) m.overdue.push(it);
       // Older work you checked off here recently stays reachable in Done, so an
       // accidental check on an overdue item can still be undone.
       else if (d < r.start && isComplete(it) && doneAt[k] && now - doneAt[k] < 7 * BC.dt.DAY_MS) m.recentDone.push(it);
@@ -981,7 +984,7 @@
     for (const it of model ? model.windowItems : []) {
       if (isComplete(it)) continue;
       const d = itemDate(it).getTime();
-      if (d < Date.now() && d < today) late++;
+      if (d < Date.now() && d < today) { if (!notDue(it)) late++; }
       else if (d >= today && d < tomorrow) todayN++;
     }
     const kids = [];
@@ -1163,8 +1166,9 @@
     }
     if (lead.length) grp(lead, "pl-meta__course");
     if (rd.time !== false && due) {
-      const late = !done && due.getTime() < Date.now();
-      const soon = !done && !late && due.getTime() - Date.now() < 3 * 3600000;
+      const past = due.getTime() < Date.now();
+      const late = !done && past && !notDue(it);
+      const soon = !done && !past && due.getTime() - Date.now() < 3 * 3600000;
       // Inside a day group the header already says the day.
       const label = t.dueFormat === "absolute" ? due.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " - " + shortTime(due) : extra && extra.timeOnly ? shortTime(due) : dueLabel(due);
       grp([el("span", { class: "pl-due" + (late ? " pl-due--late" : soon ? " pl-due--soon" : ""), text: label,

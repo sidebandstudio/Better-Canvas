@@ -192,6 +192,21 @@ test("a planner window shorter than a week still holds today", async () => {
   } finally { page.dom.window.close(); }
 });
 
+test("past lectures and announcements are not overdue work", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItemDone: (it) => !!(it.submissions && it.submissions.submitted),
+      plannerItems: async () => [
+        { plannable_type: "calendar_event", plannable_id: 5, plannable: { id: 5, title: "Lecture" }, plannable_date: new Date(2026, 10, 3, 9).toISOString(), course_id: "9" },
+        { plannable_type: "announcement", plannable_id: 6, plannable: { id: 6, title: "Room change" }, plannable_date: new Date(2026, 10, 3, 13).toISOString(), course_id: "9" },
+        { plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 3, 23, 59).toISOString(), course_id: "9" },
+      ] };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    assert.deepEqual(copy(BC.test.buildModel(s).overdue.map((it) => it.plannable.title)), ["HW 6"]);
+  } finally { page.dom.window.close(); }
+});
+
 test("recurring tasks clamp to short months and start on the day they were made", async () => {
   const { BC, page } = await plannerContext();
   try {

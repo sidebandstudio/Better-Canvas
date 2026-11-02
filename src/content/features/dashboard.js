@@ -460,6 +460,8 @@
     for (const it of items) {
       const cid = it.course_id ? String(it.course_id) : (it.context_type === "Course" ? String(it.context_id) : null);
       if (!cid) continue;
+      // Lectures, office hours and announcements aren't work that comes due.
+      if (it.plannable_type === "calendar_event" || it.plannable_type === "announcement") continue;
       const done = BC.api.plannerItemDone(it);
       const dueISO = it.plannable_date || (it.plannable && it.plannable.due_at);
       // The bar is "done in the last month", so work that isn't due yet stays out:
