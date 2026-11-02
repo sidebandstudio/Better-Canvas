@@ -667,7 +667,8 @@
         state.cards.set(String(c.id), { name: c.shortName || c.originalName || "", code: c.courseCode || "", color: c.color || "" });
       }
       state.cardsState = "done";
-      rerender(false);
+      // Before the first planner fetch lands, a render would say "all caught up".
+      if (state.range) rerender(false);
     }).catch(() => { state.cardsState = "failed"; });
   }
 

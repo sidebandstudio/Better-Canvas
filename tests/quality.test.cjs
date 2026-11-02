@@ -183,6 +183,33 @@ test("starting focus after a stop begins a new set instead of an early long brea
   } finally { page.dom.window.close(); }
 });
 
+test("the planner keeps its loading state until its first fetch, even when course cards arrive first", async () => {
+  const { database } = require("./storage-harness.cjs");
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const db = database(), page = domContext('<div id="right-side"><div class="Sidebar__TodoListContainer"></div></div>', { chrome: db.client().chrome });
+  loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/color.js", "src/content/core/icons.js", "src/content/core/injector.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
+  const BC = page.context.BC;
+  try {
+    await BC.storage.load();
+    BC.storage.current.todo.mode = "custom";
+    let feature, release;
+    BC.registry = { register(def) { feature = def; } };
+    BC.toast = { success() {}, error() {}, info() {} };
+    BC.api = { TTL: { planner: 30000 }, plannerItemDone: () => false,
+      dashboardCards: async () => [{ id: "9", shortName: "Bio", courseCode: "BIO1", color: "#336699" }],
+      plannerItems: () => new Promise((resolve) => { release = () => resolve([{ plannable_type: "assignment", plannable_id: 1,
+        plannable: { id: 1, title: "Lab report" }, plannable_date: new Date(Date.now() + 5 * 3600e3).toISOString(), course_id: "9" }]); }) };
+    vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8"), page.context);
+    feature.apply(BC.storage.current, { page: "dashboard" });
+    for (let i = 0; i < 6; i++) await settle();
+    const root_ = page.dom.window.document.querySelector('[data-bc-node="bc-todo-widget"]').shadowRoot;
+    assert.equal(root_.querySelector(".pl-empty__title"), null);
+    release();
+    for (let i = 0; i < 6; i++) await settle();
+    assert.equal(root_.querySelector(".pl-item__title").textContent, "Lab report");
+  } finally { page.dom.window.close(); }
+});
+
 async function plannerContext(now) {
   const { database } = require("./storage-harness.cjs");
   const { domContext, load: loadDom } = require("./audit-helpers.cjs");
