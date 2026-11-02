@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { root, load, domContext, settle, settingsUIFiles } = require("./audit-helpers.cjs");
 
-function setup() {
+function setup(save = async () => { throw Error("Quota exceeded"); }) {
   const { dom, context } = domContext('<div id="root"></div>', { chrome: { runtime: { getURL: (s) => s }, storage: { onChanged: { addListener() {} } } } });
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
   load(context, ...manifest.content_scripts[0].js.filter((file) => file !== "src/content/content.js"), ...settingsUIFiles());
@@ -12,7 +12,7 @@ function setup() {
   BC.toast = Object.fromEntries(["success", "error", "warn"].map((type) => [type, (text) => messages.push({ type, text })]));
   BC.util.warn = () => {};
   const element = dom.window.document.getElementById("root");
-  const store = BC.SettingsUI.render(element, { getState: BC.cloneDefaults, save: async () => { throw Error("Quota exceeded"); } });
+  const store = BC.SettingsUI.render(element, { getState: BC.cloneDefaults, save });
   return { dom, context, messages, element, store };
 }
 test("Apply waits for storage and displays an error without claiming success", async () => {
@@ -103,4 +103,15 @@ test("quota rejection keeps the settings edit, error and automatic retry value",
     assert.equal(store.saveError, null);
     assert.equal(alert.hidden, true);
   } finally { store?.destroy(); page.dom.window.close(); }
+});
+test("Save current look leaves out the settings a theme keeps", async () => {
+  const s = setup(async (state) => state);
+  try {
+    s.store.set((d) => { d.theming.reducedMotion = true; d.theming.fontSizeScale = "xl"; d.theming.logo.mode = "hide"; d.theming.accentColor = "#ff0000"; });
+    [...s.element.querySelectorAll("button")].find((b) => b.textContent.trim() === "Save current look").click();
+    await s.store.flush();
+    const saved = s.store.get().customThemes[0].settings.theming;
+    assert.equal(saved.accentColor, "#ff0000");
+    for (const key of s.context.BC.THEME_KEEPS) assert.equal(Object.hasOwn(saved, key), false, key);
+  } finally { s.store.destroy(); s.dom.window.close(); }
 });

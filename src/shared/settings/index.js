@@ -440,6 +440,8 @@
     const cur = store.get();
     const theming = JSON.parse(JSON.stringify(cur.theming));
     delete theming.rotation; // rotation config isn't part of a theme's look
+    // Neither are these. A saved look that carried them would undo them later.
+    for (const key of BC.THEME_KEEPS) delete theming[key];
     const images = BC.themeImages(cur.dashboard.themeImages);
     for (const course of Object.values(cur.dashboard.courses || {})) {
       if (course && course.bgImage && !images.some((i) => i.url === course.bgImage)) images.push({ url: course.bgImage });
