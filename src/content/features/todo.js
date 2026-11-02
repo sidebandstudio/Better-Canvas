@@ -326,6 +326,7 @@
   background: transparent; color: inherit; opacity: .8; cursor: pointer; }
 .pl-block button:hover { opacity: 1; background: rgba(255,255,255,.2); }
 .pl-block .bc-icon { width: 12px; height: 12px; }
+.pl-grid.is-dragging .pl-block { pointer-events: none; }
 .pl-now { position: absolute; left: 40px; right: 0; height: 0; border-top: 2px solid var(--bc-danger, #b91c1c); pointer-events: none; }
 .pl-now::before { content: ""; position: absolute; left: -4px; top: -5px; width: 8px; height: 8px; border-radius: 50%; background: var(--bc-danger, #b91c1c); }
 
@@ -1596,6 +1597,12 @@
       dragSource(block, key);
       grid.append(block);
     }
+    // Blocks cover their hour rows, so during a drag they let it through to the
+    // hour underneath. The class waits a tick, because restyling the source
+    // inside dragstart can cancel the drag.
+    let dragging = false;
+    body.addEventListener("dragstart", () => { dragging = true; setTimeout(() => grid.classList.toggle("is-dragging", dragging)); }, true);
+    for (const type of ["dragend", "drop"]) body.addEventListener(type, () => { dragging = false; grid.classList.remove("is-dragging"); }, true);
     if (ymd === BC.dt.ymd(today)) {
       const now = new Date();
       const mins = now.getHours() * 60 + now.getMinutes();

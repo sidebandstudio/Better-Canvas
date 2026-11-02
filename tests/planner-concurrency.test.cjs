@@ -165,3 +165,20 @@ test("expired snooze cleanup rechecks fresh data before deleting a rescheduled i
     assert.deepEqual(db.data.bcLocal.todo.snoozed, { task: future });
   } finally { a.dom.window.close(); }
 });
+
+test("Day plan blocks let a drag through to the hour underneath until it ends", async () => {
+  const today = new Date(), ymd = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0");
+  const db = database({ bcLocal: { todo: { scheduled: { [key]: { ymd, start: "09:00", dur: 60 } } } } }), a = await view(db);
+  try {
+    const task = { plannable_type: "assignment", plannable: { id: 1, title: "Assignment" }, plannable_date: today.toISOString() };
+    const body = a.doc.createElement("div");
+    a.BC.testRenderDay(body, { range: { start: today }, windowItems: [task], overdue: [] }, a.BC.storage.current, {});
+    a.doc.body.append(body);
+    const grid = body.querySelector(".pl-grid"), block = body.querySelector(".pl-block");
+    const drag = (type) => { const e = new a.dom.window.Event(type, { bubbles: true }); e.dataTransfer = { setData() {} }; block.dispatchEvent(e); };
+    drag("dragstart"); await new Promise((r) => setTimeout(r, 5));
+    assert.equal(grid.classList.contains("is-dragging"), true);
+    drag("dragend");
+    assert.equal(grid.classList.contains("is-dragging"), false);
+  } finally { a.dom.window.close(); }
+});
