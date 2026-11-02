@@ -79,7 +79,7 @@
   };
 
   BC.defaults = {
-    version: 5,
+    version: 6,
     enabled: true,
     activeProfile: "default",
     firstRun: true,
@@ -467,7 +467,7 @@
     return target;
   };
 
-  BC.SETTINGS_VERSION = 5;
+  BC.SETTINGS_VERSION = 6;
 
   // Each entry upgrades settings from (v-1) to v. `carry` collects data that
   // must move to the bcLocal store — storage.load() persists it there.
@@ -540,6 +540,18 @@
       if (!b) return;
       if (b.quickTask === "Mod+Shift+T") b.quickTask = "Alt+Shift+T";
       if (b.quickNote === "Mod+Shift+N") b.quickNote = "Alt+Shift+N";
+    },
+
+    6(s) {
+      // 3.3.3 and earlier gave scene themes one base colour for both modes, so
+      // switching modes put dark text on dark panels. Keep it for the scene's own
+      // mode. These five scenes are light, and the anime looks reuse scene ids.
+      const light = ["alpine", "dunes", "gallery", "collage", "paper"];
+      const fix = (t) => {
+        if (t && t.experience && t.darkBg && t.darkBg === t.lightBg) t[light.includes(t.experience) ? "darkBg" : "lightBg"] = "";
+      };
+      fix(s.theming);
+      for (const theme of Array.isArray(s.customThemes) ? s.customThemes : []) fix(theme && theme.settings && theme.settings.theming);
     },
   };
 

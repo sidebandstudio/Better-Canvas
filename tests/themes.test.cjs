@@ -22,9 +22,15 @@ test("every preset stays readable after the user flips dark mode, and old scene 
     const r = BC.tokens.resolve(t)[t.darkMode === "on" ? "light" : "dark"];
     for (const surface of ["surface-1", "surface-2"]) assert.ok(C.contrastRatio(r.text, r[surface]) >= 4.5, p.id + " " + surface);
   }
-  const saved = BC.mergeDefaults({ theming: { experience: "woodland", darkMode: "on", darkBg: "#102f2b", lightBg: "#102f2b" } });
+  const equal = (experience, bg) => ({ experience, darkBg: bg, lightBg: bg });
+  const saved = BC.mergeDefaults({ version: 5, theming: equal("woodland", "#102f2b"), customThemes: [{ id: "t", settings: { theming: equal("gallery", "#efe2c8") } }] });
   assert.equal(saved.theming.darkBg, "#102f2b");
   assert.equal(saved.theming.lightBg, "");
+  assert.equal(saved.customThemes[0].settings.theming.darkBg, "");
+  assert.equal(saved.customThemes[0].settings.theming.lightBg, "#efe2c8");
+  // The repair runs once. A later choice of the same colour for both modes stays.
+  const chosen = BC.mergeDefaults({ version: BC.SETTINGS_VERSION, theming: equal("gallery", "#efe2c8") });
+  assert.equal(chosen.theming.darkBg, "#efe2c8");
 });
 
 test("font stacks with an unclosed quote are refused so they can't swallow later rules", () => {

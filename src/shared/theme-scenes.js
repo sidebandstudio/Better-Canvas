@@ -189,9 +189,6 @@
       }
       const exp = s && s.theming && s.theming.experience, bg = s && s.cosmetics && s.cosmetics.background;
       if (exp && byId[exp] && bg && drawn(bg.image, 1000)) bg.image = BC.sceneArt(exp, 731, true).url;
-      // 3.3.3 and earlier saved one scene colour for both modes.
-      const t = s && s.theming;
-      if (exp && byId[exp] && t.darkBg && t.darkBg === t.lightBg) t[byId[exp].dark ? "lightBg" : "darkBg"] = "";
     };
     if (!settings) return settings;
     fix(settings);
