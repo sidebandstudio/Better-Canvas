@@ -92,6 +92,24 @@ test("shortcut recorder lets Tab move focus, clears on Backspace and ignores bar
   } finally { dom.window.close(); }
 });
 
+test("shortcuts stop firing once Better Canvas is switched off", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext("<body></body>");
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/shortcuts.js");
+    const BC = context.BC, settings = BC.cloneDefaults();
+    BC.storage = { current: settings };
+    BC.shortcuts._install();
+    let fired = 0;
+    BC.shortcuts.register("palette", "Mod+K", () => fired++);
+    const press = () => dom.window.document.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, bubbles: true, cancelable: true }));
+    press(); assert.equal(fired, 1);
+    settings.enabled = false;
+    assert.equal(press(), true, "the browser's own Ctrl+K is left alone");
+    assert.equal(fired, 1);
+  } finally { dom.window.close(); }
+});
+
 test("typing in a settings field is one undo step but each switch click is its own", () => {
   const { store } = settingsStore();
   for (const css of ["a", "a{", "a{c", "a{co", "a{color:red}"]) store.set((s) => { s.cosmetics.customCss = css; });
