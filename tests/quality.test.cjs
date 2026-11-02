@@ -655,6 +655,21 @@ test("review round 2B: syllabus dates after 'is', paragraphs in cells, and focus
   } finally { page.dom.window.close(); }
 });
 
+test("dark mode reads color(srgb) backgrounds, the form Chrome gives color-mix()", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="content"><div id="mixed" style="background-color: color(srgb 1 1 1 / 0.94)">row</div>' +
+    '<div id="plain" style="background-color: rgb(255, 255, 255)">row</div></div>');
+  try {
+    loadDom(context, "src/content/core/darkengine.js");
+    dom.window.document.documentElement.classList.add("bc-dark");
+    context.BC.darkEngine.start();
+    const tag = (id) => dom.window.document.getElementById(id).getAttribute("data-bc-dbg");
+    assert.notEqual(tag("plain"), null);
+    assert.equal(tag("mixed"), tag("plain"));
+    context.BC.darkEngine.stop();
+  } finally { dom.window.close(); }
+});
+
 test("dark mode pins dark text on mid-tone backgrounds it leaves light", () => {
   const { domContext, load: loadDom } = require("./audit-helpers.cjs");
   const { dom, context } = domContext('<style>body { color: rgb(230, 230, 235); } a { color: rgb(150, 190, 255); }</style>' +

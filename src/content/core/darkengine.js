@@ -46,12 +46,17 @@
   // ---- colour maths ---------------------------------------------------------
 
   const RGB_RE = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?\s*\)/;
+  // Chrome reports color-mix() backgrounds, like the scene panels, this way, with
+  // channels from 0 to 1.
+  const SRGB_RE = /color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+)(%?))?\s*\)/;
   function parse(s) {
-    const m = RGB_RE.exec(s || "");
+    let m = RGB_RE.exec(s || "");
+    const srgb = !m && !!(m = SRGB_RE.exec(s || ""));
     if (!m) return null;
+    const ch = (v) => (srgb ? Math.round(v * 255) : +v);
     let a = m[4] == null ? 1 : parseFloat(m[4]);
     if (m[5] === "%") a /= 100;
-    return { r: +m[1], g: +m[2], b: +m[3], a };
+    return { r: ch(m[1]), g: ch(m[2]), b: ch(m[3]), a };
   }
   function hexToRgb(hex) {
     const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || "").trim());
