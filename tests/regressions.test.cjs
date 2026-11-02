@@ -199,6 +199,18 @@ test("a commit from this tab during a theme preview reaches the drawer, so later
   assert.equal(a.storage.current.cosmetics.motion, "snow");
 });
 
+test("settings that match storage in another key order still follow external changes", async () => {
+  const mock = storageMock(), a = mock.tab(), b = mock.tab();
+  await Promise.all([a.storage.load(), b.storage.load()]);
+  a.storage.adopt(Object.fromEntries(Object.entries(copy(a.storage.current)).reverse()));
+  const next = copy(b.storage.current);
+  next.theming.darkMode = "on";
+  await b.storage.save(next);
+  a.deliver(mock.events.at(-1));
+  for (let i = 0; i < 5; i++) await settle();
+  assert.equal(a.storage.current.theming.darkMode, "on");
+});
+
 test("a no-op local save does not hide a later external change", async () => {
   const mock = storageMock(), a = mock.tab(), b = mock.tab();
   await Promise.all([a.storage.load(), b.storage.load()]);

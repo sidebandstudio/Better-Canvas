@@ -61,7 +61,9 @@
             }
             // The drawer previews unsaved edits immediately. A storage read must
             // not replace that preview with its previous saved snapshot.
-            if (current && JSON.stringify(current) !== savedSettings) continue;
+            // Compare values, not strings: the same settings in another key
+            // order read as an unsaved edit and this tab stopped following.
+            if (current && !BC.util.deepEqual(JSON.parse(JSON.stringify(current)), JSON.parse(savedSettings))) continue;
             current = BC.mergeDefaults(res && res[KEY]);
             savedSettings = JSON.stringify(current);
             for (const cb of listeners) BC.util.guard(() => cb(current), "storage");
