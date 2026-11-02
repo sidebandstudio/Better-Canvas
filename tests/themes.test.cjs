@@ -13,6 +13,17 @@ function context() {
   return ctx;
 }
 
+test("font stacks with an unclosed quote are refused so they can't swallow later rules", () => {
+  const ctx = context();
+  for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
+  const safe = (v) => ctx.BC.tokens.safeFontStack(v);
+  assert.equal(safe('"Segoe UI", Inter, sans-serif'), '"Segoe UI", Inter, sans-serif');
+  assert.equal(safe("'Open Sans', serif"), "'Open Sans', serif");
+  assert.equal(safe('"Segoe UI, sans-serif'), "");
+  assert.equal(safe("Inter'"), "");
+  assert.equal(safe("Inter; } html{display:none}"), "");
+});
+
 test("cursor settings draw the chosen shape, read the old Large value and survive theme changes", () => {
   const ctx = context();
   for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);

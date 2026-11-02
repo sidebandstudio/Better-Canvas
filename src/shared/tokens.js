@@ -404,10 +404,13 @@
 
     // theming.js interpolates the user's font stack into a declaration, and
     // cssSafe only strips <>, so `Inter; } html{display:none} .x {` would escape
-    // it. Allow only what can appear in a real font-family value.
+    // it. Allow only what can appear in a real font-family value. Each name must
+    // also close its quotes. A stray quote opened a CSS string that swallowed the
+    // rest of the sheet.
     safeFontStack(s) {
       const v = String(s == null ? "" : s).trim().slice(0, 200);
-      return /^[\w\s,'"À-ɏ-]+$/.test(v) ? v : "";
+      const name = /^\s*(?:"[^"]*"|'[^']*'|[\w\sÀ-ɏ-]+)\s*$/;
+      return /^[\w\s,'"À-ɏ-]+$/.test(v) && v.split(",").every((part) => name.test(part)) ? v : "";
     },
   };
 })();
