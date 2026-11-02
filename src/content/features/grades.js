@@ -324,7 +324,8 @@
   function buildRubricUI(panel, asn, rubric, groups, courseId) {
     const aid = String(asn.id);
     const draft = ((BC.storage.local && BC.storage.local.rubricDrafts) || {})[aid] || {};
-    const assessment = asn.rubric_assessment || {};
+    // Canvas puts the graded rubric on the embedded submission.
+    const assessment = (asn.submission && asn.submission.rubric_assessment) || {};
     const maxTotal = rubric.reduce((s, c) => s + (c.points || 0), 0);
 
     let rows = "";

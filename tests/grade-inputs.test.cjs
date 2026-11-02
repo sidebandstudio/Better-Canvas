@@ -110,3 +110,20 @@ test("failed grade history writes can retry on the next score observation", asyn
   await BC.grades.recordScore("7", 91);
   assert.equal(db.data.bcLocal.gradeHistory[7].length, 1);
 });
+
+test("the rubric predictor starts from the graded rubric on the assignment's submission", async () => {
+  const { database } = require("./storage-harness.cjs");
+  const { root } = require("./audit-helpers.cjs");
+  const page = domContext('<div id="panel"></div>', { chrome: database().client().chrome });
+  try {
+    load(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/storage.js");
+    const BC = page.context.BC;
+    await BC.storage.load(); BC.registry = { register() {} };
+    require("node:vm").runInContext(require("node:fs").readFileSync(require("node:path").join(root, "src/content/features/grades.js"), "utf8")
+      .replace("  BC.registry.register({", "  BC.testBuildRubric = buildRubricUI;\n  BC.registry.register({"), page.context);
+    const panel = page.dom.window.document.getElementById("panel");
+    const rubric = [{ id: "a", points: 10, description: "Thesis" }, { id: "b", points: 10, description: "Evidence" }];
+    BC.testBuildRubric(panel, { id: 2, submission: { rubric_assessment: { a: { points: 6 }, b: { points: 5 } } } }, rubric, null, 7);
+    assert.deepEqual([...panel.querySelectorAll("input")].map((i) => i.value), ["6", "5"]);
+  } finally { page.dom.window.close(); }
+});
