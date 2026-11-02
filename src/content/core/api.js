@@ -187,11 +187,16 @@
       );
     },
 
-    courseModules(courseId) {
-      return api.getList(
+    async courseModules(courseId) {
+      const mods = await api.getList(
         `/api/v1/courses/${courseId}/modules?include[]=items&per_page=50`,
         { maxPages: 10, ttl: TTL.modules }
       );
+      // Canvas leaves out the items of a module it thinks is too big to inline.
+      await Promise.all(mods.filter((m) => !m.items && m.items_count).map(async (m) => {
+        m.items = await api.getList(`/api/v1/courses/${courseId}/modules/${m.id}/items?per_page=100`, { maxPages: 10, ttl: TTL.modules });
+      }));
+      return mods;
     },
 
     course(courseId) {

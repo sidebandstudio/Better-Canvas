@@ -86,3 +86,19 @@ test("card due counts and progress leave out lectures and announcements", async 
     assert.equal(doc.querySelector(".bc-progress").getAttribute("aria-valuenow"), "100");
   } finally { dom.window.close(); }
 });
+
+test("modules too big for Canvas to inline fetch their items separately", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const BC = context.BC, paths = [];
+    BC.api.getList = async (path) => {
+      paths.push(path);
+      if (path.includes("/items")) return [{ id: 9, completion_requirement: { completed: true } }];
+      return [{ id: 1, items: [] }, { id: 2, items_count: 150 }];
+    };
+    const mods = await BC.api.courseModules(7);
+    assert.equal(mods[1].items.length, 1);
+    assert.deepEqual(paths.slice(1), ["/api/v1/courses/7/modules/2/items?per_page=100"]);
+  } finally { dom.window.close(); }
+});
