@@ -115,3 +115,20 @@ test("Save current look leaves out the settings a theme keeps", async () => {
     for (const key of s.context.BC.THEME_KEEPS) assert.equal(Object.hasOwn(saved, key), false, key);
   } finally { s.store.destroy(); s.dom.window.close(); }
 });
+test("Dashboard course rows show the stored colour and hidden state as soon as they load", async () => {
+  const { dom, context } = domContext('<div id="root"></div>', { chrome: { runtime: { getURL: (s) => s }, storage: { onChanged: { addListener() {} } } } });
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+  load(context, ...manifest.content_scripts[0].js.filter((file) => file !== "src/content/content.js"), ...settingsUIFiles());
+  const BC = context.BC, state = BC.cloneDefaults();
+  state.dashboard.courses["1"] = { hidden: true, color: "#ff0000" };
+  const store = BC.SettingsUI.render(dom.window.document.getElementById("root"), {
+    getState: () => state, save: async (s) => s,
+    getCourses: async () => [{ id: "1", name: "Bio", code: "B1", color: "" }],
+  }, { initialTab: "dashboard" });
+  try {
+    for (let i = 0; i < 5; i++) await settle();
+    const row = dom.window.document.querySelector(".bcs-course");
+    assert.equal(row.classList.contains("bcs-course--hidden"), true);
+    assert.equal(row.querySelector(".bcs-course__swatch").style.background, "rgb(255, 0, 0)");
+  } finally { store.destroy(); dom.window.close(); }
+});

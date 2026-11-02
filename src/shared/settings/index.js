@@ -946,8 +946,9 @@
       bgRow,
     ]);
     // "Show all" / "Reset colors" / "Reset names" change every course at once;
-    // the binding keeps each row in step.
-    S().bindings.add(wrap, () => {
+    // the binding keeps each row in step. Rows arrive after the tab's first sync,
+    // so paint once now too.
+    const paint = () => {
       const spec = (store.get().dashboard.courses || {})[c.id] || {};
       if (!focused(name) && name.value !== (spec.nickname || "")) name.value = spec.nickname || "";
       if (picker.value !== colorOf(spec)) picker.value = colorOf(spec);
@@ -959,7 +960,9 @@
       hide.title = hidden ? "Hidden — click to show" : "Shown — click to hide";
       wrap.classList.toggle("bcs-course--hidden", hidden);
       if (!focused(bg) && bg.value !== (spec.bgImage || "")) bg.value = spec.bgImage || "";
-    });
+    };
+    paint();
+    S().bindings.add(wrap, paint);
     return wrap;
   }
 
