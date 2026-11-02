@@ -421,8 +421,9 @@
     });
   }
 
-  // Keyed by course AND day: a Set of course ids alone meant a tab left open across
-  // midnight never recorded the new day's score.
+  // Keyed by course, day AND score: a Set of course ids alone meant a tab left open
+  // across midnight never recorded the new day's score, and a grade posted later
+  // the same day never replaced the morning's.
   const historyRecorded = new Set();
   // Exported so the background notification scan can record history for EVERY
   // course, not just ones whose grades page happens to get visited. That single
@@ -432,17 +433,20 @@
   // Days are LOCAL calendar days. toISOString() is UTC, so in the Americas the "day"
   // rolled over in the late afternoon and an evening visit was filed under tomorrow.
   function recordHistory(courseId, total) {
+    if (total == null) return;
     const today = BC.dt.ymd(new Date());
-    const key = courseId + ":" + today;
-    if (total == null || historyRecorded.has(key)) return;
+    const score = +total.toFixed(3);
+    const key = courseId + ":" + today + ":" + score;
+    if (historyRecorded.has(key)) return;
     // Today's point is usually there already, from an earlier page. Each page load
     // used to make a storage round trip per course to find that out.
     const known = ((BC.storage.local && BC.storage.local.gradeHistory) || {})[courseId];
-    if (Array.isArray(known) && known.some((e) => e.date === today)) { historyRecorded.add(key); return; }
+    if (Array.isArray(known) && known.some((e) => e.date === today && e.score === score)) { historyRecorded.add(key); return; }
     return BC.storage.updateLocal((d) => {
       const gh = (d.gradeHistory = d.gradeHistory || {});
       const arr = gh[courseId] || [];
-      if (!arr.some((e) => e.date === today)) arr.push({ date: today, score: +total.toFixed(3) });
+      const entry = arr.find((e) => e.date === today);
+      if (entry) entry.score = score; else arr.push({ date: today, score });
       gh[courseId] = arr.slice(-90);
     }).then(() => { historyRecorded.add(key); }).catch(() => {});
   }
