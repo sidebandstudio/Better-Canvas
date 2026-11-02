@@ -35,7 +35,7 @@
   const RESET_KEEPS = [
     ["todo", "recurring"], ["todo", "tags"], ["grades", "goals"], ["grades", "creditsByCourse"],
     ["customThemes"], ["navigation", "global", "customLinks"], ["navigation", "course", "customLinks"],
-    ["dashboard", "courseOrder"], ["onboarding"],
+    ["dashboard", "courseOrder"], ["onboarding"], ["files", "starred"],
   ];
 
   BC.SettingsState.create = function (adapter) {
@@ -234,7 +234,7 @@
       },
       // Options go back to their defaults. Things the user made stay: recurring
       // tasks, tags, grade goals, GPA credits, saved themes, custom links, course
-      // nicknames, hidden courses and card order.
+      // nicknames, hidden courses, card order and starred files.
       reset() {
         const next = BC.cloneDefaults();
         for (const path of RESET_KEEPS) {

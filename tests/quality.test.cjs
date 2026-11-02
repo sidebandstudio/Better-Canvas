@@ -31,6 +31,7 @@ test("reset restores options but keeps what the user made", () => {
     s.navigation.global.customLinks.push({ id: "l1", label: "Mail", url: "https://mail.example.edu" });
     s.dashboard.courses[7] = { nickname: "Bio", hidden: true, color: "#ff0000", bgImage: "https://example.com/a.jpg" };
     s.onboarding.seen = true;
+    s.files.starred = ["101"];
   });
   store.reset();
   const s = copy(store.get());
@@ -44,6 +45,7 @@ test("reset restores options but keeps what the user made", () => {
   assert.equal(s.navigation.global.customLinks[0].label, "Mail");
   assert.deepEqual(s.dashboard.courses[7], { nickname: "Bio", hidden: true });
   assert.equal(s.onboarding.seen, true);
+  assert.deepEqual(s.files.starred, ["101"]);
   assert.equal(store.undo(), true);
   assert.equal(store.get().dashboard.courses[7].color, "#ff0000");
 });

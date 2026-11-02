@@ -293,7 +293,7 @@
 
   // ---- shared bits ----------------------------------------------------------
 
-  const RESET_HINT = "Puts every option back to its default. Keeps your recurring tasks, tags, grade goals, GPA credits, saved themes, custom links, course nicknames and planner data.";
+  const RESET_HINT = "Puts every option back to its default. Keeps your recurring tasks, tags, grade goals, GPA credits, saved themes, custom links, course nicknames, starred files and planner data.";
   function confirmReset(store) {
     if (confirm("Reset every Better Canvas option to its default?\n\n" + RESET_HINT.replace(/^.*?\. /, ""))) store.reset();
   }
