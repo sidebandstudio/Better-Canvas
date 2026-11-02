@@ -41,7 +41,7 @@
     const light = id === "anime-sakura" || id === "anime-dream";
     const images = Array.from({ length: 32 }, (_, i) => ({ url: "bc-art:" + asset + "#" + ((i + offset) % 32), title: name + " · scene " + (i + 1), creator: "Better Canvas original artwork" }));
     BC.PRESET_THEMES.push({ id, name, category: "anime", animated: true, description, settings: {
-      theming: { darkMode: light ? "off" : "on", darkBg: bg, lightBg: bg, accentColor: accent, radius: 18, experience },
+      theming: { darkMode: light ? "off" : "on", [light ? "lightBg" : "darkBg"]: bg, accentColor: accent, radius: 18, experience },
       dashboard: { themeImages: images },
       cosmetics: { background: { mode: "image", image: "bc-wall:" + asset, opacity: 100, blur: 0, when: "always" }, motion },
     } });

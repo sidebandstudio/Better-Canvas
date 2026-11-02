@@ -13,6 +13,20 @@ function context() {
   return ctx;
 }
 
+test("every preset stays readable after the user flips dark mode, and old scene colours are repaired", () => {
+  const ctx = context();
+  for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
+  const { BC } = ctx, C = BC.color;
+  for (const p of BC.PRESET_THEMES) {
+    const t = { ...BC.defaults.theming, ...p.settings.theming };
+    const r = BC.tokens.resolve(t)[t.darkMode === "on" ? "light" : "dark"];
+    for (const surface of ["surface-1", "surface-2"]) assert.ok(C.contrastRatio(r.text, r[surface]) >= 4.5, p.id + " " + surface);
+  }
+  const saved = BC.mergeDefaults({ theming: { experience: "woodland", darkMode: "on", darkBg: "#102f2b", lightBg: "#102f2b" } });
+  assert.equal(saved.theming.darkBg, "#102f2b");
+  assert.equal(saved.theming.lightBg, "");
+});
+
 test("font stacks with an unclosed quote are refused so they can't swallow later rules", () => {
   const ctx = context();
   for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
