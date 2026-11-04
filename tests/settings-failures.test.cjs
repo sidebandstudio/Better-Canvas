@@ -132,3 +132,21 @@ test("Dashboard course rows show the stored colour and hidden state as soon as t
     assert.equal(row.querySelector(".bcs-course__swatch").style.background, "rgb(255, 0, 0)");
   } finally { store.destroy(); dom.window.close(); }
 });
+
+test("handing over after an update gives Canvas its clicks back when the settings panel was open", async () => {
+  const db = require("./storage-harness.cjs").database();
+  const chrome = db.client().chrome;
+  chrome.runtime.onMessage = { addListener() {} };
+  const page = domContext('<div id="bc-drawer" data-bc-node="bc-drawer" style="display: block"></div>', { chrome });
+  try {
+    page.dom.window.document.body.inert = true;   // a dead copy's open panel
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+    load(page.context, ...manifest.content_scripts[0].js);
+    assert.equal(page.dom.window.document.body.inert, false);
+    assert.equal(page.dom.window.document.getElementById("bc-drawer"), null);
+    let closed = 0;
+    page.context.BC.features.settingsPanel.close = () => { closed++; };
+    page.dom.window.dispatchEvent(new page.dom.window.CustomEvent("bc:retire"));
+    assert.equal(closed, 1, "a live copy closes its panel before stepping aside");
+  } finally { page.dom.window.close(); }
+});

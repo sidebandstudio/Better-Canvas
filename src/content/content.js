@@ -115,6 +115,8 @@
     BC.util.guard(() => BC.observer && BC.observer.stop && BC.observer.stop(), "retire:observer");
     BC.util.guard(() => BC.shortcuts && BC.shortcuts.stop && BC.shortcuts.stop(), "retire:shortcuts");
     BC.util.guard(() => BC.lifecycle.clear("settingsPanel-persist"), "retire:panel");
+    // Closing gives Canvas back its clicks. Removing the open panel left the page inert.
+    BC.util.guard(() => BC.features.settingsPanel && BC.features.settingsPanel.close(), "retire:close");
     // Everything we ever put on the page, including the settings panel and its
     // nav item, which ordinary teardown deliberately keeps.
     for (const n of document.querySelectorAll("[data-bc-node], style[data-better-canvas]")) n.remove();
@@ -254,7 +256,11 @@
     // The dispatch is synchronous, so anything still on the page is a dead copy's:
     // Firefox stops old content scripts on update without letting them answer. Its
     // settings button stayed and did nothing, and blocked ours from being added.
-    for (const n of document.querySelectorAll("[data-bc-node], style[data-better-canvas]")) n.remove();
+    for (const n of document.querySelectorAll("[data-bc-node], style[data-better-canvas]")) {
+      // Its open settings panel had made the page inert.
+      if (n.id === "bc-drawer" && n.style.display !== "none" && document.body) document.body.inert = false;
+      n.remove();
+    }
     window.addEventListener("bc:retire", retire);
     // Tells the service worker this page's copy knows how to hand over.
     document.documentElement.setAttribute("data-bc-handover", "");
