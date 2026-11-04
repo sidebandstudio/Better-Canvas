@@ -164,3 +164,16 @@ test("the rubric predictor leaves out criteria that don't count toward the score
     assert.match(dom.window.document.querySelector("[data-total]").textContent, /10 \/ 10 \(100\.0%\)/);
   } finally { dom.window.close(); }
 });
+
+test("planner items count as done the way Canvas's planner counts them", () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const done = (it) => context.BC.api.plannerItemDone(it);
+    assert.equal(done({ plannable_type: "assessment_request", plannable: { workflow_state: "completed" }, submissions: false }), true);
+    assert.equal(done({ plannable_type: "assessment_request", plannable: { workflow_state: "assigned" }, submissions: false }), false);
+    assert.equal(done({ plannable_type: "assignment", submissions: { submitted: true, redo_request: true } }), false);
+    assert.equal(done({ plannable_type: "assignment", submissions: { submitted: true } }), true);
+    assert.equal(done({ plannable_type: "assignment", submissions: { submitted: true, redo_request: true }, planner_override: { marked_complete: true } }), true);
+  } finally { dom.window.close(); }
+});

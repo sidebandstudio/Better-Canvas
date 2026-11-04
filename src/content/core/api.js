@@ -86,8 +86,10 @@
       if (!it) return false;
       const o = it.planner_override;
       if (o && typeof o.marked_complete === "boolean") return o.marked_complete;
+      // Peer reviews carry no submission. A teacher's redo request reopens one.
+      if (it.plannable_type === "assessment_request") return !!(it.plannable && it.plannable.workflow_state === "completed");
       const s = it.submissions;
-      return !!(s && (s.submitted || s.graded));
+      return !!(s && !s.redo_request && (s.submitted || s.graded));
     },
     async getJSON(path, { ttl } = {}) {
       const url = path.startsWith("http") ? path : base + path;
