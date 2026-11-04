@@ -399,8 +399,6 @@
           get: () => t.radius, set: put((x, v) => { x.radius = v; }) }) }),
         row({ label: "Rounded corners", hint: "Off squares every corner, Canvas's and ours.",
           control: C.switch({ ariaLabel: "Rounded corners", get: () => t.roundedUI, set: put((x, v) => { x.roundedUI = v; }) }) }),
-        row({ label: "Sidebar width", hint: "Width of Canvas's left navigation. 0 keeps the default.",
-          control: C.number({ ariaLabel: "Sidebar width", min: 0, max: 400, suffix: "px", get: () => t.sidebarWidth, set: put((x, v) => { x.sidebarWidth = Math.max(0, v | 0); }) }) }),
       ]),
       sec("Visibility", [
         row({ label: "Focus ring", hint: "The outline on the link or button you reach with the Tab key.", stacked: true,
