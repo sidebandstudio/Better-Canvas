@@ -81,8 +81,9 @@
   function buildCss(settings) {
     const t = settings.theming;
     const fontSize = FONT_SCALE[t.fontSizeScale || "m"] || 1;
-    const lineHeight = t.lineHeight || 1.5;
-    const letter = t.letterSpacing || 0;
+    // Numbers only. A string from an imported file would land in the CSS as is.
+    const lineHeight = Number(t.lineHeight) || 1.5;
+    const letter = Number(t.letterSpacing) || 0;
     const density = DENSITY_PAD[t.density] || 1;
 
     // cssSafe only strips <>, which is not enough for a value interpolated into a

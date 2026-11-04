@@ -297,3 +297,15 @@ test("theme API failures and rate limits reach the gallery as recoverable errors
   const empty = await bg.message({ type: "bc:themeSearch", query: " " });
   assert.match(empty.error, /Enter something/);
 });
+
+test("imported settings and themes can't turn a section or list into another type", () => {
+  const { BC } = context();
+  const s = BC.mergeDefaults({ version: BC.SETTINGS_VERSION, cosmetics: { background: null, customCss: "x" }, theming: { logo: "hide", darkSchedule: [] }, customThemes: "none" });
+  assert.equal(s.cosmetics.background.mode, BC.defaults.cosmetics.background.mode);
+  assert.equal(s.cosmetics.customCss, "x");
+  assert.equal(s.theming.logo.mode, BC.defaults.theming.logo.mode);
+  assert.equal(Array.isArray(s.customThemes), true);
+  BC.applyTheme(s, { settings: { cosmetics: { background: null }, theming: { accentColor: "#123456" } } });
+  assert.equal(typeof s.cosmetics.background, "object");
+  assert.equal(s.theming.accentColor, "#123456");
+});
