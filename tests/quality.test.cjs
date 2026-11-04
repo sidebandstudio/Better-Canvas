@@ -595,6 +595,30 @@ test("leaving a Canvas page always asks the worker to check the toolbar count", 
   } finally { page.dom.window.close(); }
 });
 
+test("an old 0% baseline for an ungraded course is dropped, so the first real grade isn't a change", async () => {
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const page = domContext("", { chrome: { runtime: { id: "t", sendMessage: (msg, cb) => { cb && cb(); } } } });
+  try {
+    loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/lifecycle.js", "src/content/core/api.js");
+    const BC = page.context.BC, never = () => new Promise(() => {}), alarms = {}, toasts = [];
+    let data = { scoreSeen: { 7: 0 } }, score = null;
+    const settings = BC.cloneDefaults();
+    Object.assign(settings.notifications, { inPage: true, types: { newGrade: true } });
+    Object.assign(BC, { alarms: { every(id, _ms, fn) { alarms[id] = fn; }, clear() {} }, toast: { info: (m) => toasts.push(m) },
+      storage: { current: settings, local: data, updateLocal: async (fn) => { data = JSON.parse(JSON.stringify(data)); fn(data); BC.storage.local = data; } } });
+    Object.assign(BC.api, { plannerItems: never, courseAnnouncements: never,
+      coursesWithScores: async () => [{ id: 7, name: "Bio", enrollments: [{ computed_current_score: score, computed_final_score: 0 }] }] });
+    loadDom(page.context, "src/content/features/notifications.js");
+    BC.features.notifications.apply(settings);
+    for (let i = 0; i < 4; i++) await settle();
+    assert.equal(data.scoreSeen[7], undefined);
+    score = 95; alarms["bc-notif-scan"]();
+    for (let i = 0; i < 4; i++) await settle();
+    assert.deepEqual(toasts, []);
+    assert.equal(data.scoreSeen[7], 95);
+  } finally { page.dom.window.close(); }
+});
+
 test("the toolbar count clears once no Canvas tab is left", async () => {
   const listeners = {}, badge = [];
   let open = [{ id: 1 }];

@@ -151,12 +151,14 @@
     // the user actually VISITS a course's grades page, so it can't detect a change
     // while they sit on the dashboard.
     const seenScores = (BC.storage.local && BC.storage.local.scoreSeen) || {};
-    const nextSeen = {};
+    const nextSeen = {}, unseen = [];
 
     for (const c of courses) {
       const id = String(c.id);
       const cur = BC.api.courseScore(c);
-      if (cur == null) continue;
+      // An older baseline here, like the 0% once read for an ungraded course,
+      // would make the first real grade look like a change.
+      if (cur == null) { if (seenScores[id] != null) unseen.push(id); continue; }
       nextSeen[id] = cur;
 
       if (wantGrade) {
@@ -191,8 +193,11 @@
       }
     }
 
-    if (Object.keys(nextSeen).length) {
-      BC.storage.updateLocal((d) => { d.scoreSeen = Object.assign(d.scoreSeen || {}, nextSeen); });
+    if (Object.keys(nextSeen).length || unseen.length) {
+      BC.storage.updateLocal((d) => {
+        d.scoreSeen = Object.assign(d.scoreSeen || {}, nextSeen);
+        for (const id of unseen) delete d.scoreSeen[id];
+      });
     }
   }
 
