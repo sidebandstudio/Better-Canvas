@@ -114,6 +114,24 @@ test("failed grade history writes can retry on the next score observation", asyn
   assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 90, "a score seen earlier today can be the latest again");
 });
 
+test("a tab repeating its cached score doesn't replace a newer grade another tab recorded", async () => {
+  const db = require("./storage-harness.cjs").database();
+  async function tab() {
+    const t = db.tab(); await t.storage.load();
+    load(t.context, "src/content/core/datetime.js");
+    t.context.BC.registry = { register() {} }; t.context.BC.util.warn = () => {};
+    load(t.context, "src/content/features/grades.js");
+    return t;
+  }
+  const a = await tab(), b = await tab();
+  await a.context.BC.grades.recordScore("7", 90);
+  await b.context.BC.grades.recordScore("7", 95);
+  a.deliver(db.events.at(-1)); await settle();
+  assert.equal(a.context.BC.storage.local.gradeHistory[7][0].score, 95, "tab A sees tab B's write");
+  await a.context.BC.grades.recordScore("7", 90);
+  assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 95);
+});
+
 test("the rubric predictor starts from the graded rubric on the assignment's submission", async () => {
   const { database } = require("./storage-harness.cjs");
   const { root } = require("./audit-helpers.cjs");

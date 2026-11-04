@@ -433,24 +433,28 @@
   // caller is what makes the trend chart, dashboard sparklines and the Insights tab
   // actually accumulate data.
   BC.grades.recordScore = function (courseId, total) { return recordHistory(String(courseId), total); };
+  // What this tab last saw recorded. A repeat from its own API cache would
+  // otherwise replace a newer grade another tab had just recorded for today.
+  const recorded = new Map();
   // Days are LOCAL calendar days. toISOString() is UTC, so in the Americas the "day"
   // rolled over in the late afternoon and an evening visit was filed under tomorrow.
   function recordHistory(courseId, total) {
     if (total == null) return;
     const today = BC.dt.ymd(new Date());
-    const score = +total.toFixed(3);
+    const score = +total.toFixed(3), seen = today + "|" + score;
+    if (recorded.get(courseId) === seen) return;
     // Today's point is usually there already, from an earlier page. Each page load
     // used to make a storage round trip per course to find that out. Other tabs
     // keep it current, so a grade posted later the same day still replaces it.
     const known = ((BC.storage.local && BC.storage.local.gradeHistory) || {})[courseId];
-    if (Array.isArray(known) && known.some((e) => e.date === today && e.score === score)) return;
+    if (Array.isArray(known) && known.some((e) => e.date === today && e.score === score)) { recorded.set(courseId, seen); return; }
     return BC.storage.updateLocal((d) => {
       const gh = (d.gradeHistory = d.gradeHistory || {});
       const arr = gh[courseId] || [];
       const entry = arr.find((e) => e.date === today);
       if (entry) entry.score = score; else arr.push({ date: today, score });
       gh[courseId] = arr.slice(-90);
-    }).catch(() => {});
+    }).then(() => { recorded.set(courseId, seen); }, () => {});
   }
 
   function apply(settings, ctx) {
