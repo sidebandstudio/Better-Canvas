@@ -177,3 +177,32 @@ test("planner items count as done the way Canvas's planner counts them", () => {
     assert.equal(done({ plannable_type: "assignment", submissions: { submitted: true, redo_request: true }, planner_override: { marked_complete: true } }), true);
   } finally { dom.window.close(); }
 });
+
+test("grade tools read a past course's weighting and load only the grading period Canvas scores", async () => {
+  const { dom, context } = domContext('<div id="main"><div id="grades_summary"></div></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/api.js");
+    const BC = context.BC, nodes = new Map(), urls = [];
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
+    BC.registry = { register(feature) { BC.feature = feature; } };
+    BC.storage = { local: {}, updateLocal: async () => {}, update: async () => {} };
+    const groups = [
+      { group_weight: 90, assignments: [{ id: 1, points_possible: 10, submission: { score: 0 } }] },
+      { group_weight: 10, assignments: [{ id: 2, points_possible: 10, submission: { score: 10 } }] },
+    ];
+    let courses = [];
+    BC.api.getList = async (url) => { urls.push(url); return url.includes("assignment_groups") ? groups : courses; };
+    BC.api.getJSON = async () => ({ id: 7, apply_assignment_group_weights: false });
+    load(context, "src/content/features/grades.js");
+    const settings = BC.cloneDefaults(); settings.grades.autoRefresh = false;
+    BC.feature.apply(settings, { page: "grades", courseId: "7", path: "/courses/7/grades" });
+    for (let i = 0; i < 5; i++) await settle();
+    assert.equal(dom.window.document.querySelector(".bc-gt-total").textContent, "50.00%", "weighting off still holds after the course ends");
+    courses = [{ id: 7, apply_assignment_group_weights: true, enrollments: [{ has_grading_periods: true, totals_for_all_grading_periods_option: false, current_grading_period_id: "4", current_period_computed_current_score: 81 }] }];
+    settings.grades.showTrendChart = !settings.grades.showTrendChart;
+    BC.feature.apply(settings, { page: "grades", courseId: "7", path: "/courses/7/grades" });
+    for (let i = 0; i < 5; i++) await settle();
+    assert.match(urls.at(-1), /assignment_groups\?.*&grading_period_id=4&scope_assignments_to_student=true$/);
+    assert.equal(dom.window.document.querySelector(".bc-gt-total").textContent, "81.00%");
+  } finally { dom.window.close(); }
+});

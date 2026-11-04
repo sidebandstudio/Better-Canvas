@@ -135,17 +135,24 @@
   // BC.cache.wrap with a TTL and in-flight de-duplication, so the extra cache was
   // redundant — and by never expiring it was the thing that made the grade panel
   // show stale totals for the whole session after a new grade posted.
-  function ensureGroups(courseId) {
-    return BC.api.assignmentGroups(courseId);
+  function ensureGroups(courseId, periodId) {
+    return BC.api.assignmentGroups(courseId, periodId);
   }
 
-  // Canvas's score (the same one the dashboard pill and notifications use) and
-  // whether the course weights its assignment groups.
+  // Canvas's score (the same one the dashboard pill and notifications use), the
+  // grading period it covers and whether the course weights its assignment groups.
+  // A past course isn't in the active list, but its weighting still counts.
   function courseInfo(courseId) {
-    return Promise.resolve().then(() => BC.api.coursesWithScores()).then((list) => {
+    return Promise.resolve().then(() => BC.api.coursesWithScores()).then(async (list) => {
       const c = list.find((x) => String(x.id) === String(courseId));
-      return { score: c ? BC.api.courseScore(c) : null, weights: c ? c.apply_assignment_group_weights : undefined };
+      const weights = c ? c.apply_assignment_group_weights
+        : await BC.api.course(courseId).then((x) => x && x.apply_assignment_group_weights, () => undefined);
+      return { score: c ? BC.api.courseScore(c) : null, weights, period: c ? BC.api.scorePeriod(c) : null };
     }).catch(() => ({ score: null }));
+  }
+  // Groups for the same grading period as Canvas's score.
+  function courseData(courseId) {
+    return courseInfo(courseId).then((info) => ensureGroups(courseId, info.period).then((groups) => [groups, info]));
   }
 
   const finalInputs = new Map();   // courseId -> the "need on final" inputs as typed
@@ -215,7 +222,7 @@
       return d;
     });
     if (!panel.childElementCount) panel.replaceChildren(BC.ui.skeleton(4));
-    Promise.all([ensureGroups(courseId), courseInfo(courseId)]).then(([groups, info]) => {
+    courseData(courseId).then(([groups, info]) => {
       // Canvas's own current score, the number the dashboard, goal alerts and
       // history use too. Our estimate only fills in when Canvas hides it.
       const canvas = info.score;
@@ -409,9 +416,8 @@
     panel.replaceChildren(BC.ui.skeleton(3));
     Promise.all([
       BC.api.assignment(courseId, assignmentId),
-      ensureGroups(courseId).catch(() => null),
-      courseInfo(courseId),
-    ]).then(([asn, groups, info]) => {
+      courseData(courseId).catch(() => [null, {}]),
+    ]).then(([asn, [groups, info]]) => {
       // Criteria marked "only for feedback" don't count toward the score.
       const rubric = ((asn && asn.rubric) || []).filter((c) => !c.ignore_for_scoring);
       if (!rubric.length) { BC.injector.removeNode("bc-rubric"); return; }
