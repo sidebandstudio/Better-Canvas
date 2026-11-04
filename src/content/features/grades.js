@@ -89,8 +89,10 @@
     return result;
   }
 
-  BC.grades.computeTotal = function (groups) {
-    const weighted = groups.some((g) => g.group_weight);
+  // Canvas keeps group weights after a teacher turns weighting off, so pass the
+  // course's apply_assignment_group_weights when it's known.
+  BC.grades.computeTotal = function (groups, weights) {
+    const weighted = weights !== false && groups.some((g) => g.group_weight);
     let earned = 0, possible = 0;
     for (const group of groups) {
       const { pts, poss } = groupTotal(group);
@@ -137,12 +139,13 @@
     return BC.api.assignmentGroups(courseId);
   }
 
-  // Same rule as the dashboard pill and notifications.
-  function canvasScore(courseId) {
+  // Canvas's score (the same one the dashboard pill and notifications use) and
+  // whether the course weights its assignment groups.
+  function courseInfo(courseId) {
     return Promise.resolve().then(() => BC.api.coursesWithScores()).then((list) => {
       const c = list.find((x) => String(x.id) === String(courseId));
-      return c ? BC.api.courseScore(c) : null;
-    }).catch(() => null);
+      return { score: c ? BC.api.courseScore(c) : null, weights: c ? c.apply_assignment_group_weights : undefined };
+    }).catch(() => ({ score: null }));
   }
 
   const finalInputs = new Map();   // courseId -> the "need on final" inputs as typed
@@ -212,12 +215,13 @@
       return d;
     });
     if (!panel.childElementCount) panel.replaceChildren(BC.ui.skeleton(4));
-    Promise.all([ensureGroups(courseId), canvasScore(courseId)]).then(([groups, canvas]) => {
+    Promise.all([ensureGroups(courseId), courseInfo(courseId)]).then(([groups, info]) => {
       // Canvas's own current score, the number the dashboard, goal alerts and
       // history use too. Our estimate only fills in when Canvas hides it.
-      const total = canvas != null ? canvas : BC.grades.computeTotal(groups);
+      const canvas = info.score;
+      const total = canvas != null ? canvas : BC.grades.computeTotal(groups, info.weights);
       const estimated = canvas == null && total != null;
-      const hasWeights = groups.some((g) => g.group_weight);
+      const hasWeights = info.weights !== false && groups.some((g) => g.group_weight);
       const goal = BC.gradeNumber(((settings.grades.goals || {})[courseId] || {}).target);
       const missing = [];
       for (const g of groups) for (const a of (g.assignments || [])) {
@@ -311,15 +315,15 @@
 
   // ---- Rubric predictor (assignment pages) ----
 
-  function computeTotalWith(groups, assignmentId, score) {
+  function computeTotalWith(groups, assignmentId, score, weights) {
     const cloned = groups.map((g) => !(g.assignments || []).some((a) => String(a.id) === String(assignmentId)) ? g : Object.assign({}, g, {
       assignments: (g.assignments || []).map((a) =>
         String(a.id) === String(assignmentId) ? Object.assign({}, a, { submission: { score } }) : a),
     }));
-    return BC.grades.computeTotal(cloned);
+    return BC.grades.computeTotal(cloned, weights);
   }
 
-  function buildRubricUI(panel, asn, rubric, groups, courseId) {
+  function buildRubricUI(panel, asn, rubric, groups, courseId, weights) {
     const aid = String(asn.id);
     const draft = ((BC.storage.local && BC.storage.local.rubricDrafts) || {})[aid] || {};
     // Canvas puts the graded rubric on the embedded submission.
@@ -359,7 +363,7 @@
 
     const totalEl = panel.querySelector("[data-total]");
     const impactEl = panel.querySelector("[data-impact]");
-    const current = groups ? BC.grades.computeTotal(groups) : null;
+    const current = groups ? BC.grades.computeTotal(groups, weights) : null;
     function refresh() {
       let sum = 0;
       for (const row of panel.querySelectorAll(".bc-rubric-crit")) {
@@ -372,7 +376,7 @@
       if (groups) {
         const points = asn.points_possible || maxTotal;
         const scaled = maxTotal > 0 ? (sum / maxTotal) * points : 0;
-        const projected = computeTotalWith(groups, aid, scaled);
+        const projected = computeTotalWith(groups, aid, scaled, weights);
         if (projected != null) {
           impactEl.textContent = `Course grade if scored: ${projected.toFixed(2)}%` +
             (current != null ? ` (now ${current.toFixed(2)}%)` : "");
@@ -406,10 +410,11 @@
     Promise.all([
       BC.api.assignment(courseId, assignmentId),
       ensureGroups(courseId).catch(() => null),
-    ]).then(([asn, groups]) => {
+      courseInfo(courseId),
+    ]).then(([asn, groups, info]) => {
       const rubric = asn && asn.rubric;
       if (!rubric || !rubric.length) { BC.injector.removeNode("bc-rubric"); return; }
-      buildRubricUI(panel, asn, rubric, groups, courseId);
+      buildRubricUI(panel, asn, rubric, groups, courseId, info.weights);
     }).catch((e) => {
       BC.util.warn("rubric", e);
       panel.dataset.bcBuilt = "";

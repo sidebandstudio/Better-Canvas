@@ -47,3 +47,14 @@ test("weights adding up to more than 100 count as extra credit instead of being 
     { group_weight: 5, assignments: [assignment(3, 10, 10)] },
   ]) - 89) < 1e-10);
 });
+test("group weights are ignored when the course has weighting turned off", () => {
+  const context = vm.createContext({ BC: { registry: { register() {} } } });
+  load(context, "src/content/features/grades.js");
+  const groups = [
+    { group_weight: 90, assignments: [assignment(1, 10, 10)] },
+    { group_weight: 10, assignments: [assignment(2, 0, 90)] },
+  ];
+  assert.equal(context.BC.grades.computeTotal(groups, false), 10);
+  assert.equal(context.BC.grades.computeTotal(groups, true), 90);
+  assert.equal(context.BC.grades.computeTotal(groups), 90, "unknown falls back to the groups' weights");
+});
