@@ -132,7 +132,7 @@
     coursesWithScores() {
       return api.getList(
         "/api/v1/courses?enrollment_state=active&enrollment_type=student" +
-        "&include[]=total_scores&include[]=current_grading_period_scores&include[]=concluded&include[]=term&per_page=100",
+        "&include[]=total_scores&include[]=concluded&include[]=term&per_page=100",
         { maxPages: 20, ttl: TTL.courses }
       );
     },
@@ -140,19 +140,12 @@
     // The score Canvas shows the student for a course from coursesWithScores.
     // The final score counts ungraded work as zero, so before anything is graded
     // it reads 0% while the current score is null. It only stands in once the
-    // course is over. A course that hides the all-periods total shows the
-    // current grading period's score instead.
+    // course is over.
     courseScore(c) {
       const e = ((c && c.enrollments) || [])[0] || {};
       let s = e.computed_current_score;
-      if (api.scorePeriod(c)) s = e.current_period_computed_current_score;
-      else if (s == null && (c.concluded === true || e.enrollment_state === "completed")) s = e.computed_final_score;
+      if (s == null && (c.concluded === true || e.enrollment_state === "completed")) s = e.computed_final_score;
       return s == null || s === "" || !Number.isFinite(Number(s)) ? null : Number(s);
-    },
-    // The grading period behind that score, or null when it covers every period.
-    scorePeriod(c) {
-      const e = ((c && c.enrollments) || [])[0] || {};
-      return (e.has_grading_periods && e.totals_for_all_grading_periods_option === false && e.current_grading_period_id) || null;
     },
 
     // Past-term courses. enrollment_state=active above leaves them out.
@@ -160,11 +153,9 @@
       return api.getList("/api/v1/courses?enrollment_state=completed&per_page=100", { maxPages: 5, ttl: TTL.courses });
     },
 
-    // periodId keeps only that grading period's assignments.
-    assignmentGroups(courseId, periodId) {
+    assignmentGroups(courseId) {
       return api.getList(
-        `/api/v1/courses/${courseId}/assignment_groups?include[]=assignments&include[]=submission&per_page=100` +
-          (periodId ? "&grading_period_id=" + encodeURIComponent(periodId) + "&scope_assignments_to_student=true" : ""),
+        `/api/v1/courses/${courseId}/assignment_groups?include[]=assignments&include[]=submission&per_page=100`,
         { maxPages: 10, ttl: TTL.groups }
       );
     },

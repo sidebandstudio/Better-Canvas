@@ -131,7 +131,7 @@ test("the rubric predictor starts from the graded rubric on the assignment's sub
   } finally { page.dom.window.close(); }
 });
 
-test("course scores ignore the zero final score before anything is graded and follow a hidden-total grading period", () => {
+test("course scores ignore the zero final score before anything is graded", () => {
   const { dom, context } = domContext();
   try {
     load(context, "src/content/core/api.js");
@@ -140,9 +140,6 @@ test("course scores ignore the zero final score before anything is graded and fo
     assert.equal(score({ computed_current_score: 91.5, computed_final_score: 40 }), 91.5);
     assert.equal(score({ computed_current_score: null, computed_final_score: 77 }, { concluded: true }), 77);
     assert.equal(score({ computed_current_score: null, computed_final_score: 77, enrollment_state: "completed" }), 77);
-    const periods = { has_grading_periods: true, current_grading_period_id: "4", computed_current_score: 80, current_period_computed_current_score: 93 };
-    assert.equal(score({ ...periods, totals_for_all_grading_periods_option: false }), 93);
-    assert.equal(score({ ...periods, totals_for_all_grading_periods_option: true }), 80);
     assert.equal(context.BC.api.courseScore({}), null);
   } finally { dom.window.close(); }
 });
@@ -178,11 +175,11 @@ test("planner items count as done the way Canvas's planner counts them", () => {
   } finally { dom.window.close(); }
 });
 
-test("grade tools read a past course's weighting and load only the grading period Canvas scores", async () => {
+test("grade tools read a past course's weighting setting", async () => {
   const { dom, context } = domContext('<div id="main"><div id="grades_summary"></div></div>');
   try {
     load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/api.js");
-    const BC = context.BC, nodes = new Map(), urls = [];
+    const BC = context.BC, nodes = new Map();
     BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
     BC.registry = { register(feature) { BC.feature = feature; } };
     BC.storage = { local: {}, updateLocal: async () => {}, update: async () => {} };
@@ -190,19 +187,12 @@ test("grade tools read a past course's weighting and load only the grading perio
       { group_weight: 90, assignments: [{ id: 1, points_possible: 10, submission: { score: 0 } }] },
       { group_weight: 10, assignments: [{ id: 2, points_possible: 10, submission: { score: 10 } }] },
     ];
-    let courses = [];
-    BC.api.getList = async (url) => { urls.push(url); return url.includes("assignment_groups") ? groups : courses; };
+    BC.api.getList = async (url) => url.includes("assignment_groups") ? groups : [];
     BC.api.getJSON = async () => ({ id: 7, apply_assignment_group_weights: false });
     load(context, "src/content/features/grades.js");
     const settings = BC.cloneDefaults(); settings.grades.autoRefresh = false;
     BC.feature.apply(settings, { page: "grades", courseId: "7", path: "/courses/7/grades" });
     for (let i = 0; i < 5; i++) await settle();
     assert.equal(dom.window.document.querySelector(".bc-gt-total").textContent, "50.00%", "weighting off still holds after the course ends");
-    courses = [{ id: 7, apply_assignment_group_weights: true, enrollments: [{ has_grading_periods: true, totals_for_all_grading_periods_option: false, current_grading_period_id: "4", current_period_computed_current_score: 81 }] }];
-    settings.grades.showTrendChart = !settings.grades.showTrendChart;
-    BC.feature.apply(settings, { page: "grades", courseId: "7", path: "/courses/7/grades" });
-    for (let i = 0; i < 5; i++) await settle();
-    assert.match(urls.at(-1), /assignment_groups\?.*&grading_period_id=4&scope_assignments_to_student=true$/);
-    assert.equal(dom.window.document.querySelector(".bc-gt-total").textContent, "81.00%");
   } finally { dom.window.close(); }
 });

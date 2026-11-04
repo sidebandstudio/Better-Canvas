@@ -135,24 +135,23 @@
   // BC.cache.wrap with a TTL and in-flight de-duplication, so the extra cache was
   // redundant — and by never expiring it was the thing that made the grade panel
   // show stale totals for the whole session after a new grade posted.
-  function ensureGroups(courseId, periodId) {
-    return BC.api.assignmentGroups(courseId, periodId);
+  function ensureGroups(courseId) {
+    return BC.api.assignmentGroups(courseId);
   }
 
-  // Canvas's score (the same one the dashboard pill and notifications use), the
-  // grading period it covers and whether the course weights its assignment groups.
-  // A past course isn't in the active list, but its weighting still counts.
+  // Canvas's score (the same one the dashboard pill and notifications use) and
+  // whether the course weights its assignment groups. A past course isn't in the
+  // active list, but its weighting still counts.
   function courseInfo(courseId) {
     return Promise.resolve().then(() => BC.api.coursesWithScores()).then(async (list) => {
       const c = list.find((x) => String(x.id) === String(courseId));
       const weights = c ? c.apply_assignment_group_weights
         : await BC.api.course(courseId).then((x) => x && x.apply_assignment_group_weights, () => undefined);
-      return { score: c ? BC.api.courseScore(c) : null, weights, period: c ? BC.api.scorePeriod(c) : null };
+      return { score: c ? BC.api.courseScore(c) : null, weights };
     }).catch(() => ({ score: null }));
   }
-  // Groups for the same grading period as Canvas's score.
   function courseData(courseId) {
-    return courseInfo(courseId).then((info) => ensureGroups(courseId, info.period).then((groups) => [groups, info]));
+    return Promise.all([ensureGroups(courseId), courseInfo(courseId)]);
   }
 
   const finalInputs = new Map();   // courseId -> the "need on final" inputs as typed
