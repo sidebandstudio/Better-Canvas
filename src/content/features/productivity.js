@@ -216,7 +216,7 @@
   // and never remove them, while renderNotes rebuilt every note on every tick:
   // ~10 new permanent mousemove handlers per second, which froze the tab within
   // a minute of browsing.
-  let dragEl = null, dragOx = 0, dragOy = 0;
+  let dragEl = null, dragOx = 0, dragOy = 0, dragPointer = null;
   function installNoteDrag() {
     const bag = BC.lifecycle.pageBag("productivity");
     bag.once("note-drag", () => {
@@ -224,9 +224,11 @@
       // the release coming when the pointer leaves the window.
       bag.listen(document, "pointerdown", (e) => {
         const head = e.target.closest && e.target.closest(".bc-note-head");
-        if (!head || e.button !== 0 || e.target.closest("button")) return;
+        // One pointer drags at a time. A second finger is ignored until it ends.
+        if (!head || dragEl || e.button !== 0 || e.target.closest("button")) return;
         dragEl = head.closest(".bc-note");
         if (!dragEl) return;
+        dragPointer = e.pointerId;
         if (head.setPointerCapture) head.setPointerCapture(e.pointerId);
         // page*, not client*: notes are absolutely positioned in DOCUMENT
         // coordinates, so on a scrolled page the viewport-relative offset made the
@@ -236,12 +238,12 @@
         e.preventDefault();
       });
       bag.listen(document, "pointermove", (e) => {
-        if (!dragEl) return;
+        if (!dragEl || e.pointerId !== dragPointer) return;
         dragEl.style.left = (e.pageX - dragOx) + "px";
         dragEl.style.top = (e.pageY - dragOy) + "px";
       });
-      const drop = () => {
-        if (!dragEl) return;
+      const drop = (e) => {
+        if (!dragEl || e.pointerId !== dragPointer) return;
         const el = dragEl, id = el.dataset.noteId;
         dragEl = null;
         const x = el.offsetLeft, y = el.offsetTop;

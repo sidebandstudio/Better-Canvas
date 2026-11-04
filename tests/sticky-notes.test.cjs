@@ -67,8 +67,12 @@ test("a sticky note drags with a finger or pen and its delete button still works
     BC.features.productivity.apply({ productivity: { stickyNotes: true, quickActions: false } });
     await settle();
     const head = W.document.querySelector(".bc-note-head");
-    const fire = (type, target, x, y) => target.dispatchEvent(new W.PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, pointerType: "touch", clientX: x, clientY: y }));
-    fire("pointerdown", head, 110, 110); fire("pointermove", head, 160, 190); fire("pointerup", head, 160, 190);
+    const fire = (type, target, x, y, pointerId = 1) => target.dispatchEvent(new W.PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId, pointerType: "touch", clientX: x, clientY: y }));
+    fire("pointerdown", head, 110, 110); fire("pointermove", head, 160, 190);
+    // A second finger neither moves the note nor ends the first finger's drag.
+    fire("pointerdown", head, 400, 400, 2); fire("pointermove", head, 400, 400, 2); fire("pointerup", head, 400, 400, 2);
+    assert.equal(W.document.querySelector(".bc-note").style.left, "50px");
+    fire("pointerup", head, 160, 190);
     await BC.storage.updateLocal(() => {});
     // jsdom has no layout, so offsets start at 0 and the note lands at the 50px moved.
     assert.equal(W.document.querySelector(".bc-note").style.left, "50px");
