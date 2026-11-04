@@ -150,3 +150,16 @@ test("handing over after an update gives Canvas its clicks back when the setting
     assert.equal(closed, 1, "a live copy closes its panel before stepping aside");
   } finally { page.dom.window.close(); }
 });
+
+test("picking a light palette after a light scene shows that palette", async () => {
+  const s = setup(async (state) => state);
+  try {
+    s.store.set((d) => { d.theming.lightBg = "#b4ced4"; });
+    s.context.BC.SettingsUI.goto("theming");
+    const select = s.element.querySelector('[aria-label="Light palette"]');
+    const pick = select.tagName === "SELECT" ? select : select.querySelector("select");
+    pick.value = "ocean"; pick.dispatchEvent(new s.dom.window.Event("change", { bubbles: true }));
+    assert.equal(s.store.get().theming.lightPreset, "ocean");
+    assert.equal(s.store.get().theming.lightBg, "");
+  } finally { s.store.destroy(); s.dom.window.close(); }
+});

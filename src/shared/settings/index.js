@@ -377,7 +377,9 @@
         row({ label: "Custom dark background", hint: "Replaces the palette's background color.",
           control: C.color({ ariaLabel: "Custom dark background", allowEmpty: true, get: () => t.darkBg, set: put((x, v) => { x.darkBg = v; }) }) }),
         fallbackNotice(store),
-        row({ label: "Light palette", control: C.select({ ariaLabel: "Light palette", get: () => t.lightPreset, set: put((x, v) => { x.lightPreset = v; }),
+        // Light scenes set their own light background, which no control shows, so
+        // picking a palette clears it.
+        row({ label: "Light palette", control: C.select({ ariaLabel: "Light palette", get: () => t.lightPreset, set: put((x, v) => { x.lightPreset = v; x.lightBg = ""; }),
           options: Object.entries(BC.LIGHT_PRESETS).map(([k, v]) => ({ value: k, label: v.label })) }) }),
       ]),
       sec("Typography", [
