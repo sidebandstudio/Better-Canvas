@@ -71,6 +71,22 @@
       // A version number alone isn't enough: other exports have one too.
       return SETTINGS_SECTIONS.some((k) => isObj(j[k])) || (typeof j.version === "number" && typeof j.enabled === "boolean") ? "settings" : null;
     },
+    // Local data with an old settings file's carry-over filled in. This device's
+    // entries win, but the old file's stars, steps and other per-task maps still
+    // land when the planner here already has data of its own.
+    withCarry(base, carry) {
+      const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+      const fill = (to, from) => {
+        for (const k of Object.keys(from)) {
+          if (to[k] === undefined) to[k] = from[k];
+          else if (isObj(to[k]) && isObj(from[k])) fill(to[k], from[k]);
+        }
+        return to;
+      };
+      const out = fill(BC.cleanData(base || {}), BC.cleanData(carry.local || {}));
+      if (carry.gradeHistory) out.gradeHistory = Object.assign({}, carry.gradeHistory, out.gradeHistory || {});
+      return out;
+    },
     render(root, adapter, opts) {
       const o = opts || {};
       if (root.dispose) root.dispose();
@@ -1703,16 +1719,10 @@
         if (!carry) { BC.toast && BC.toast.error("That isn't a settings file"); return; }
         const adapter = store.adapter || {};
         // Data an old backup kept inside settings, lifted out by the migrations.
-        const lifted = Object.assign({}, carry.local || {});
-        const hasLifted = Object.keys(lifted).length > 0 || !!carry.gradeHistory;
+        const hasLifted = Object.keys(carry.local || {}).length > 0 || !!carry.gradeHistory;
         try { await store.flush(); } catch (error) { BC.toast && BC.toast.error("Settings could not be imported: " + error.message); return; }
         if (!adapter.saveLocal || (!localPart && !hasLifted)) { BC.toast && BC.toast.success("Settings imported"); return; }
-        const restore = (base) => {
-          const out = Object.assign({}, base || {});
-          for (const k of Object.keys(lifted)) if (out[k] === undefined) out[k] = lifted[k];
-          if (carry.gradeHistory) out.gradeHistory = Object.assign({}, carry.gradeHistory, out.gradeHistory || {});
-          return out;
-        };
+        const restore = (base) => BC.SettingsUI.withCarry(base, carry);
         // A backup with local data replaces it. Legacy settings-only carry-over
         // merges with fresh data inside the storage transaction.
         Promise.resolve(localPart ? adapter.saveLocal(restore(localPart)) : adapter.updateLocal(restore))

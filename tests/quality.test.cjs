@@ -63,6 +63,17 @@ test("settings import recognizes backups and turns away theme files and old lock
   assert.equal(kind([]), null);
 });
 
+test("an old settings file's planner stars and steps land next to this device's planner data", () => {
+  const context = vm.createContext({ console, setTimeout, clearTimeout, structuredClone, navigator: { platform: "Win32" } });
+  load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/shared/settings/index.js");
+  const BC = context.BC, carry = {};
+  BC.mergeDefaults({ version: 3, todo: { local: { stars: { a: true, b: true }, subtasks: { a: [{ text: "Outline" }] } } } }, carry);
+  const out = BC.SettingsUI.withCarry({ todo: { stars: { b: false, c: true } }, notes: { x: 1 } }, carry);
+  assert.deepEqual(JSON.parse(JSON.stringify(out.todo.stars)), { b: false, c: true, a: true }, "this device's entries win");
+  assert.equal(out.todo.subtasks.a[0].text, "Outline");
+  assert.deepEqual(JSON.parse(JSON.stringify(out.notes)), { x: 1 });
+});
+
 test("shortcut recorder lets Tab move focus, clears on Backspace and ignores bare Enter", () => {
   const { domContext, load: loadDom } = require("./audit-helpers.cjs");
   const { dom, context } = domContext('<div id="root"></div>');
