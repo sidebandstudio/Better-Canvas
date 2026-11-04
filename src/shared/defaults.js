@@ -375,18 +375,19 @@
     return data;
   };
 
+  // A list, a section or a plain value. An imported file can't change which.
+  BC.settingShape = (v) => Array.isArray(v) ? "list" : v && typeof v === "object" ? "section" : "value";
+
   BC.mergeDefaults = function (stored, carry) {
     const base = BC.cloneDefaults();
     if (!stored || typeof stored !== "object") return base;
     stored = BC.cleanData(stored);
-    const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
     const merge = (target, src) => {
       for (const k of Object.keys(src)) {
         const sv = src[k];
-        // A list or section can't become another type. A backup with
-        // cosmetics.background: null stopped the settings page from opening.
-        if (Array.isArray(target[k]) && !Array.isArray(sv)) continue;
-        if (isObj(target[k]) && !isObj(sv)) continue;
+        // A backup with cosmetics.background: null stopped the settings page from
+        // opening, and theming.darkMode: [] couldn't be fixed by any theme.
+        if (target[k] !== undefined && BC.settingShape(target[k]) !== BC.settingShape(sv)) continue;
         if (Array.isArray(sv)) target[k] = sv;
         else if (sv && typeof sv === "object")
           target[k] = merge(target[k] && typeof target[k] === "object" ? target[k] : {}, sv);

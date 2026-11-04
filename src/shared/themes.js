@@ -153,8 +153,8 @@
     const merge = (to, from) => {
       for (const key of Object.keys(from)) {
         const value = from[key];
-        // Same rule as mergeDefaults: a section stays a section.
-        if (to[key] && typeof to[key] === "object" && (Array.isArray(to[key]) !== Array.isArray(value) || !value || typeof value !== "object")) continue;
+        // Same rule as mergeDefaults.
+        if (to[key] !== undefined && BC.settingShape(to[key]) !== BC.settingShape(value)) continue;
         if (Array.isArray(value)) to[key] = JSON.parse(JSON.stringify(value));
         else if (value && typeof value === "object") {
           if (!to[key] || typeof to[key] !== "object" || Array.isArray(to[key])) to[key] = {};

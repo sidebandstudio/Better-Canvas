@@ -308,4 +308,10 @@ test("imported settings and themes can't turn a section or list into another typ
   BC.applyTheme(s, { settings: { cosmetics: { background: null }, theming: { accentColor: "#123456" } } });
   assert.equal(typeof s.cosmetics.background, "object");
   assert.equal(s.theming.accentColor, "#123456");
+  // A plain value can't become a list either, so a preset can still set it.
+  const broken = BC.mergeDefaults({ version: BC.SETTINGS_VERSION, theming: { darkMode: [] } });
+  assert.equal(broken.theming.darkMode, BC.defaults.theming.darkMode);
+  BC.applyTheme(broken, { settings: { theming: { darkMode: "on", radius: {} } } });
+  assert.equal(broken.theming.darkMode, "on");
+  assert.equal(broken.theming.radius, BC.defaults.theming.radius);
 });
