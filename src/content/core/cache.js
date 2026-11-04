@@ -14,6 +14,8 @@
       if (inflight.has(key)) return inflight.get(key);
       const p = Promise.resolve().then(fetcher).then((val) => {
         if (inflight.get(key) === p) {
+          // Keys with a timestamp in them never hit again, so drop expired entries.
+          for (const [k, v] of store) if (v.expires <= Date.now()) store.delete(k);
           store.set(key, { value: val, expires: now + ttlMs });
           inflight.delete(key);
         }
