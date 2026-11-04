@@ -146,3 +146,21 @@ test("course scores ignore the zero final score before anything is graded and fo
     assert.equal(context.BC.api.courseScore({}), null);
   } finally { dom.window.close(); }
 });
+
+test("the rubric predictor leaves out criteria that don't count toward the score", async () => {
+  const { dom, context } = domContext('<div id="right-side"></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/ui.js", "src/content/core/lifecycle.js");
+    const BC = context.BC, nodes = new Map();
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
+    BC.registry = { register(feature) { BC.feature = feature; } };
+    BC.api = { assignmentGroups: async () => [], assignment: async () => ({ id: 2, points_possible: 10,
+      rubric: [{ id: "a", points: 10, description: "Scored" }, { id: "b", points: 5, description: "Feedback only", ignore_for_scoring: true }] }) };
+    BC.storage = { local: {}, updateLocal: async () => {}, update: async () => {} };
+    load(context, "src/content/features/grades.js");
+    BC.feature.apply(BC.cloneDefaults(), { page: "assignment", courseId: "7", path: "/courses/7/assignments/2" });
+    await settle();
+    assert.equal(dom.window.document.querySelectorAll(".bc-rubric-crit").length, 1);
+    assert.match(dom.window.document.querySelector("[data-total]").textContent, /10 \/ 10 \(100\.0%\)/);
+  } finally { dom.window.close(); }
+});

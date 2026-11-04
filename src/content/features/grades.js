@@ -412,8 +412,9 @@
       ensureGroups(courseId).catch(() => null),
       courseInfo(courseId),
     ]).then(([asn, groups, info]) => {
-      const rubric = asn && asn.rubric;
-      if (!rubric || !rubric.length) { BC.injector.removeNode("bc-rubric"); return; }
+      // Criteria marked "only for feedback" don't count toward the score.
+      const rubric = ((asn && asn.rubric) || []).filter((c) => !c.ignore_for_scoring);
+      if (!rubric.length) { BC.injector.removeNode("bc-rubric"); return; }
       buildRubricUI(panel, asn, rubric, groups, courseId, info.weights);
     }).catch((e) => {
       BC.util.warn("rubric", e);
