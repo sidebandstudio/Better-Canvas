@@ -79,7 +79,7 @@
   };
 
   BC.defaults = {
-    version: 6,
+    version: 7,
     enabled: true,
     activeProfile: "default",
     firstRun: true,
@@ -467,7 +467,7 @@
     return target;
   };
 
-  BC.SETTINGS_VERSION = 6;
+  BC.SETTINGS_VERSION = 7;
 
   // Each entry upgrades settings from (v-1) to v. `carry` collects data that
   // must move to the bcLocal store — storage.load() persists it there.
@@ -543,16 +543,34 @@
     },
 
     6(s) {
-      // 3.3.3 and earlier gave scene themes one base colour for both modes, so
-      // switching modes put dark text on dark panels. Keep it for the scene's own
-      // mode. These five scenes are light, and the anime looks reuse scene ids.
-      const light = ["alpine", "dunes", "gallery", "collage", "paper"];
-      const fix = (t) => {
-        if (t && t.experience && t.darkBg && t.darkBg === t.lightBg) t[light.includes(t.experience) ? "darkBg" : "lightBg"] = "";
-      };
-      fix(s.theming);
-      for (const theme of Array.isArray(s.customThemes) ? s.customThemes : []) fix(theme && theme.settings && theme.settings.theming);
+      sceneColours(s.theming);
+      for (const theme of Array.isArray(s.customThemes) ? s.customThemes : []) sceneColours(theme && theme.settings && theme.settings.theming);
     },
+
+    7(s) {
+      for (const theme of Array.isArray(s.customThemes) ? s.customThemes : []) BC.cleanSavedLook(theme && theme.settings);
+    },
+  };
+
+  // 3.3.3 and earlier gave scene themes one base colour for both modes, so
+  // switching modes put dark text on dark panels. Keep it for the scene's own
+  // mode. These five scenes are light, and the anime looks reuse scene ids.
+  function sceneColours(t) {
+    const light = ["alpine", "dunes", "gallery", "collage", "paper"];
+    if (t && t.experience && t.darkBg && t.darkBg === t.lightBg) t[light.includes(t.experience) ? "darkBg" : "lightBg"] = "";
+  }
+
+  // Saved looks and theme files from 3.3.3 and earlier copied every theming key
+  // and an empty customCss. Applying one undid the user's accessibility and
+  // layout settings and erased their CSS.
+  BC.cleanSavedLook = function (look) {
+    const t = look && look.theming;
+    if (t && typeof t === "object") {
+      for (const key of BC.THEME_KEEPS) delete t[key];
+      sceneColours(t);
+    }
+    if (look && look.cosmetics && look.cosmetics.customCss === "") delete look.cosmetics.customCss;
+    return look;
   };
 
   BC.migrate = function (s, carry) {

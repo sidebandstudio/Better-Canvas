@@ -462,7 +462,10 @@
     for (const course of Object.values(cur.dashboard.courses || {})) {
       if (course && course.bgImage && !images.some((i) => i.url === course.bgImage)) images.push({ url: course.bgImage });
     }
-    return { id: BC.util.uuid(), name, settings: { theming, cosmetics: JSON.parse(JSON.stringify(cur.cosmetics)),
+    const cosmetics = JSON.parse(JSON.stringify(cur.cosmetics));
+    // An empty one would erase CSS written after the look was saved.
+    if (!cosmetics.customCss) delete cosmetics.customCss;
+    return { id: BC.util.uuid(), name, settings: { theming, cosmetics,
       dashboard: { themeImages: BC.themeImages(images) } } };
   }
 
@@ -716,7 +719,7 @@
       f.text().then(async (txt) => {
         try {
           const j = JSON.parse(txt);
-          const settings = j && typeof j === "object" ? themeOnly(j.settings) : null;
+          const settings = j && typeof j === "object" ? BC.cleanSavedLook(themeOnly(j.settings)) : null;
           if (!settings) throw new Error("this file has no theme in it");
           const saved = { id: BC.util.uuid(), name: String(j.name || "Imported theme").slice(0, 80), settings };
           store.set((x) => { x.customThemes = (x.customThemes || []).concat([saved]); });

@@ -33,6 +33,25 @@ test("every preset stays readable after the user flips dark mode, and old scene 
   assert.equal(chosen.theming.darkBg, "#efe2c8");
 });
 
+test("old saved looks and theme files stop resetting accessibility settings and custom CSS", () => {
+  const { BC } = context();
+  const old = { theming: { ...BC.defaults.theming, accentColor: "#123456" }, cosmetics: { ...BC.defaults.cosmetics, customCss: "" } };
+  delete old.theming.rotation;
+  const s = BC.mergeDefaults({ version: 6, theming: { reducedMotion: true, colorBlind: "deuteranopia", fontSizeScale: "xl" },
+    cosmetics: { customCss: "a { color: red }" }, customThemes: [{ id: "fall", name: "Fall", settings: copy(old) }] });
+  const look = s.customThemes[0].settings;
+  for (const key of BC.THEME_KEEPS) assert.equal(key in look.theming, false, key);
+  assert.equal("customCss" in look.cosmetics, false);
+  assert.equal(look.theming.accentColor, "#123456");
+  BC.applyTheme(s, s.customThemes[0]);
+  assert.equal(s.theming.reducedMotion, true);
+  assert.equal(s.theming.colorBlind, "deuteranopia");
+  assert.equal(s.theming.fontSizeScale, "xl");
+  assert.equal(s.cosmetics.customCss, "a { color: red }");
+  const file = BC.cleanSavedLook(BC.themeOnly({ theming: { experience: "gallery", darkBg: "#efe2c8", lightBg: "#efe2c8", focusRing: "bold" }, cosmetics: { customCss: "" } }));
+  assert.deepEqual(copy(file), { theming: { experience: "gallery", darkBg: "", lightBg: "#efe2c8" }, cosmetics: {} });
+});
+
 test("font stacks with an unclosed quote are refused so they can't swallow later rules", () => {
   const ctx = context();
   for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
