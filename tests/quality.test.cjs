@@ -329,7 +329,8 @@ test("calendar export keeps event spans, skips announcements and gives each type
       { plannable_type: "calendar_event", plannable_id: 7, plannable_date: "2027-03-03T14:00:00Z", plannable: { title: "Lab", start_at: "2027-03-03T14:00:00Z", end_at: "2027-03-03T16:00:00Z" } },
       // Made in Tokyo: midnight there on March 4 is still March 3 for most of the world.
       { plannable_type: "calendar_event", plannable_id: 8, plannable_date: "2027-03-03T15:00:00Z", plannable: { title: "No class", all_day: true, start_at: "2027-03-03T15:00:00Z", end_at: "2027-03-03T15:00:00Z" } },
-    ], getJSON: async (url) => { assert.equal(url, "/api/v1/calendar_events/8"); return { all_day_date: "2027-03-04" }; } };
+      { plannable_type: "calendar_event", plannable_id: 11, plannable_date: "2027-03-09T15:00:00Z", plannable: { title: "Break", all_day: true, start_at: "2027-03-09T15:00:00Z", end_at: "2027-03-11T15:00:00Z" } },
+    ], getJSON: async (url) => ({ all_day_date: { "/api/v1/calendar_events/8": "2027-03-04", "/api/v1/calendar_events/11": "2027-03-10" }[url] }) };
     let blob;
     dom.window.URL.createObjectURL = (b) => { blob = b; return "blob:test"; };
     dom.window.URL.revokeObjectURL = () => {};
@@ -342,6 +343,7 @@ test("calendar export keeps event spans, skips announcements and gives each type
     assert.match(ics, /UID:bc-discussion_topic-5@bc-test\.instructure\.com/);
     assert.match(ics, /DTSTART:20270303T140000Z\r\nDTEND:20270303T160000Z/);
     assert.match(ics, /DTSTART;VALUE=DATE:20270304\r\nDTEND;VALUE=DATE:20270305/);
+    assert.match(ics, /DTSTART;VALUE=DATE:20270310\r\nDTEND;VALUE=DATE:20270313/, "three days stay three days");
     assert.match(ics, /URL:http:\/\/bc-test\.instructure\.com\/courses\/1\/assignments\/5/);
   } finally { dom.window.close(); }
 });

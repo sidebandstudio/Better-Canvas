@@ -68,7 +68,10 @@
         const dayAfter = (d) => { const x = new Date(d); x.setDate(x.getDate() + 1); return x; };
         const day = allDayDates.get(it);
         const dayStart = day && new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
-        const span = allDay && dayStart ? ["DTSTART;VALUE=DATE:" + ymd(dayStart), "DTEND;VALUE=DATE:" + ymd(dayAfter(dayStart))]
+        // A multi-day event keeps its length: whole days from start to end, both midnights.
+        const lastDay = dayStart && new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() +
+          Math.max(0, Math.round((new Date(pl.end_at || pl.start_at || due) - new Date(pl.start_at || due)) / 864e5)));
+        const span = allDay && dayStart ? ["DTSTART;VALUE=DATE:" + ymd(dayStart), "DTEND;VALUE=DATE:" + ymd(dayAfter(lastDay))]
           : allDay ? ["DTSTART;VALUE=DATE:" + ymd(pl.start_at || due), "DTEND;VALUE=DATE:" + ymd(dayAfter(pl.end_at || pl.start_at || due))]
           : ["DTSTART:" + icsDate(pl.start_at || due), "DTEND:" + icsDate(pl.end_at || new Date(new Date(due).getTime() + 30 * 60 * 1000))];
         const url = it.html_url ? new URL(it.html_url, location.origin).href : "";
