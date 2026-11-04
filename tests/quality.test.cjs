@@ -370,8 +370,9 @@ test("grade tools show Canvas's current score and keep the final-exam inputs thr
     BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
     BC.registry = { register(feature) { BC.feature = feature; } };
     // Our own estimate would be 50%. Canvas says 88.
-    BC.api = { assignmentGroups: async () => [{ assignments: [{ id: 1, points_possible: 10, submission: { score: 5 } }] }],
-      coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 88 }] }] };
+    loadDom(context, "src/content/core/api.js");
+    Object.assign(BC.api, { assignmentGroups: async () => [{ assignments: [{ id: 1, points_possible: 10, submission: { score: 5 } }] }],
+      coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 88 }] }] });
     BC.storage = { local: {}, updateLocal: async () => {}, update: async () => {} };
     loadDom(context, "src/content/features/grades.js");
     const settings = BC.cloneDefaults(); settings.grades.autoRefresh = false;
@@ -397,7 +398,8 @@ test("the grade trend ends at today's current grade, not an earlier score from t
     const BC = context.BC, nodes = new Map();
     BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
     BC.registry = { register(feature) { BC.feature = feature; } };
-    BC.api = { assignmentGroups: async () => [{ assignments: [] }], coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 95 }] }] };
+    loadDom(context, "src/content/core/api.js");
+    Object.assign(BC.api, { assignmentGroups: async () => [{ assignments: [] }], coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 95 }] }] });
     const today = BC.dt.ymd(new Date()), yesterday = BC.dt.ymd(BC.dt.addDays(new Date(), -1));
     BC.storage = { local: { gradeHistory: { 7: [{ date: yesterday, score: 80 }, { date: today, score: 90 }] } }, updateLocal: async () => {}, update: async () => {} };
     loadDom(context, "src/content/features/grades.js");

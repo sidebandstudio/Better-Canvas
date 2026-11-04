@@ -155,10 +155,9 @@
 
     for (const c of courses) {
       const id = String(c.id);
-      const enr = (c.enrollments || [])[0] || {};
-      const cur = enr.computed_current_score != null ? enr.computed_current_score : enr.computed_final_score;
+      const cur = BC.api.courseScore(c);
       if (cur == null) continue;
-      nextSeen[id] = Number(cur);
+      nextSeen[id] = cur;
 
       if (wantGrade) {
         const prev = seenScores[id];

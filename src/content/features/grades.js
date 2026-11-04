@@ -137,13 +137,11 @@
     return BC.api.assignmentGroups(courseId);
   }
 
-  // Same rule as the dashboard pill and notifications: current score, else final.
+  // Same rule as the dashboard pill and notifications.
   function canvasScore(courseId) {
     return Promise.resolve().then(() => BC.api.coursesWithScores()).then((list) => {
       const c = list.find((x) => String(x.id) === String(courseId));
-      const e = (c && c.enrollments || [])[0] || {};
-      const s = e.computed_current_score != null ? e.computed_current_score : e.computed_final_score;
-      return s == null ? null : Number(s);
+      return c ? BC.api.courseScore(c) : null;
     }).catch(() => null);
   }
 

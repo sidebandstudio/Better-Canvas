@@ -130,9 +130,22 @@
     coursesWithScores() {
       return api.getList(
         "/api/v1/courses?enrollment_state=active&enrollment_type=student" +
-        "&include[]=total_scores&include[]=concluded&include[]=term&per_page=100",
+        "&include[]=total_scores&include[]=current_grading_period_scores&include[]=concluded&include[]=term&per_page=100",
         { maxPages: 20, ttl: TTL.courses }
       );
+    },
+
+    // The score Canvas shows the student for a course from coursesWithScores.
+    // The final score counts ungraded work as zero, so before anything is graded
+    // it reads 0% while the current score is null. It only stands in once the
+    // course is over. A course that hides the all-periods total shows the
+    // current grading period's score instead.
+    courseScore(c) {
+      const e = ((c && c.enrollments) || [])[0] || {};
+      let s = e.computed_current_score;
+      if (e.has_grading_periods && e.totals_for_all_grading_periods_option === false && e.current_grading_period_id) s = e.current_period_computed_current_score;
+      else if (s == null && (c.concluded === true || e.enrollment_state === "completed")) s = e.computed_final_score;
+      return s == null || s === "" || !Number.isFinite(Number(s)) ? null : Number(s);
     },
 
     // Past-term courses. enrollment_state=active above leaves them out.

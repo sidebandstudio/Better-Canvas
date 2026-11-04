@@ -130,3 +130,19 @@ test("the rubric predictor starts from the graded rubric on the assignment's sub
     assert.deepEqual([...panel.querySelectorAll("input")].map((i) => i.value), ["6", "5"]);
   } finally { page.dom.window.close(); }
 });
+
+test("course scores ignore the zero final score before anything is graded and follow a hidden-total grading period", () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const score = (enrollment, course = {}) => context.BC.api.courseScore({ ...course, enrollments: [enrollment] });
+    assert.equal(score({ computed_current_score: null, computed_final_score: 0 }), null);
+    assert.equal(score({ computed_current_score: 91.5, computed_final_score: 40 }), 91.5);
+    assert.equal(score({ computed_current_score: null, computed_final_score: 77 }, { concluded: true }), 77);
+    assert.equal(score({ computed_current_score: null, computed_final_score: 77, enrollment_state: "completed" }), 77);
+    const periods = { has_grading_periods: true, current_grading_period_id: "4", computed_current_score: 80, current_period_computed_current_score: 93 };
+    assert.equal(score({ ...periods, totals_for_all_grading_periods_option: false }), 93);
+    assert.equal(score({ ...periods, totals_for_all_grading_periods_option: true }), 80);
+    assert.equal(context.BC.api.courseScore({}), null);
+  } finally { dom.window.close(); }
+});

@@ -444,9 +444,8 @@
     const list = await BC.api.coursesWithScores();
     const scores = new Map();
     for (const c of list) {
-      const enr = (c.enrollments || [])[0] || {};
-      const s = enr.computed_current_score != null ? enr.computed_current_score : enr.computed_final_score;
-      if (s != null) scores.set(String(c.id), Number(s));
+      const s = BC.api.courseScore(c);
+      if (s != null) scores.set(String(c.id), s);
     }
     return scores;
   }

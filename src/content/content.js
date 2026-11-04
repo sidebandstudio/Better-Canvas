@@ -233,8 +233,7 @@
     if (msg.type === "bc:gpaData") {
       BC.api.coursesWithScores().then((courses) => sendResponse({ ok: true, courses: courses.map((c) => {
         const enr = (c.enrollments || [])[0] || {};
-        const score = enr.computed_current_score != null ? enr.computed_current_score : enr.computed_final_score;
-        return { id: String(c.id), name: c.name || c.course_code || ("Course " + c.id), score: score == null ? null : Number(score), concluded: c.concluded === true || enr.enrollment_state === "completed" };
+        return { id: String(c.id), name: c.name || c.course_code || ("Course " + c.id), score: BC.api.courseScore(c), concluded: c.concluded === true || enr.enrollment_state === "completed" };
       }) })).catch((e) => sendResponse({ ok: false, error: String(e) }));
       return true;
     }
