@@ -841,6 +841,21 @@ test("module progress stays off for a teacher, whose modules carry no completion
   } finally { dom.window.close(); }
 });
 
+test("discussion tools also run on a group's discussion", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div><div id="discussion-redesign-layout"><div data-testid="discussion-entry-container"><div class="user_content">Hello there</div></div></div></div>');
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/lifecycle.js");
+    const BC = context.BC;
+    BC.injector = { setStyle() {}, removeNode() {} }; BC.diag = { push() {} };
+    BC.registry = { register: (f) => { BC.feature = f; } };
+    loadDom(context, "src/content/features/discussions.js");
+    const settings = BC.cloneDefaults(); settings.discussions.wordCount = true;
+    BC.feature.apply(settings, { page: "other", path: "/groups/5/discussion_topics/9", courseId: null });
+    assert.ok(dom.window.document.querySelector('[data-bc-node="bc-disc-bar"]'));
+  } finally { dom.window.close(); }
+});
+
 test("found on real Canvas: text on accent fills uses the accent's contrast colour", () => {
   const theming = fs.readFileSync(path.join(root, "src/content/features/theming.js"), "utf8");
   assert.match(theming, /\.Button--primary \{[^}]*color: var\(--bc-accent-contrast/);

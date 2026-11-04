@@ -171,7 +171,8 @@
   function apply(settings, ctx) {
     const d = settings.discussions || {};
     const anyOn = d.collapse || d.jumpToUnread || d.wordCount || d.instructorHighlight;
-    const onTopic = ctx.page === "discussions" && /\/discussion_topics\/\d+/.test(ctx.path);
+    // Group discussions live under /groups, so they aren't a course "discussions" page.
+    const onTopic = /^\/(courses|groups)\/\d+\/discussion_topics\/\d+/.test(ctx.path);
     const kind = onTopic ? layout() : null;
     if (!anyOn || !kind) {
       collapsed = false;
