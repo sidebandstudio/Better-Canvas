@@ -382,7 +382,8 @@
       ]),
       sec("Typography", [
         row({ label: "Font", hint: "A CSS font stack. Empty keeps Canvas's font.",
-          control: C.text({ ariaLabel: "Font family", placeholder: "Canvas default", get: () => t.font, set: put((x, v) => { x.font = v; }) }) }),
+          control: C.text({ ariaLabel: "Font family", placeholder: "Canvas default", get: () => t.font, set: put((x, v) => { x.font = v; }),
+            validate: (v) => !v.trim() || BC.tokens.safeFontStack(v) ? true : "Use font names separated by commas, and close any quotes." }) }),
         row({ label: "Text size", control: C.segmented({ ariaLabel: "Text size", get: () => t.fontSizeScale, set: put((x, v) => { x.fontSizeScale = v; }),
           options: [{ value: "xs", label: "XS" }, { value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }, { value: "xl", label: "XL" }] }) }),
         row({ label: "Line height", control: C.slider({ ariaLabel: "Line height", min: 1.1, max: 2, step: 0.05, format: (v) => Number(v).toFixed(2),

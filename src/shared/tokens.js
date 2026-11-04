@@ -406,11 +406,12 @@
     // cssSafe only strips <>, so `Inter; } html{display:none} .x {` would escape
     // it. Allow only what can appear in a real font-family value. Each name must
     // also close its quotes. A stray quote opened a CSS string that swallowed the
-    // rest of the sheet.
+    // rest of the sheet. Letters from any script are fine, so names like
+    // "微软雅黑" or "맑은 고딕" work.
     safeFontStack(s) {
       const v = String(s == null ? "" : s).trim().slice(0, 200);
-      const name = /^\s*(?:"[^"]*"|'[^']*'|[\w\sÀ-ɏ-]+)\s*$/;
-      return /^[\w\s,'"À-ɏ-]+$/.test(v) && v.split(",").every((part) => name.test(part)) ? v : "";
+      const name = /^\s*(?:"[^"]*"|'[^']*'|[\p{L}\p{M}\p{N}_\s-]+)\s*$/u;
+      return /^[\p{L}\p{M}\p{N}_\s,'"-]+$/u.test(v) && v.split(",").every((part) => name.test(part)) ? v : "";
     },
   };
 })();

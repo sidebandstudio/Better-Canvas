@@ -61,6 +61,9 @@ test("font stacks with an unclosed quote are refused so they can't swallow later
   assert.equal(safe('"Segoe UI, sans-serif'), "");
   assert.equal(safe("Inter'"), "");
   assert.equal(safe("Inter; } html{display:none}"), "");
+  assert.equal(safe('"微软雅黑", メイリオ, 맑은 고딕, Ελληνικά, sans-serif'), '"微软雅黑", メイリオ, 맑은 고딕, Ελληνικά, sans-serif');
+  assert.equal(safe("मंगल"), "मंगल");
+  assert.equal(safe("Noto: x"), "");
 });
 
 test("cursor settings draw the chosen shape, read the old Large value and survive theme changes", () => {
