@@ -65,11 +65,14 @@
     return BC.storage.request({ type: "bc:quizSubmitted", root }).catch((e) => { submitted = false; throw e; });
   }
 
+  // Essay answers are left out. Canvas moves them into a rich text editor in an
+  // iframe, so typing there never reaches these listeners, and writing the hidden
+  // textarea back changed nothing the student sees or submits.
   function collectInputs() {
     return Array.from(document.querySelectorAll(
       "#questions input[type=radio], #questions input[type=checkbox], " +
       "#questions input[type=text], #questions input[type=number], " +
-      "#questions textarea, #questions select"
+      "#questions textarea:not(.question_input), #questions select"
     ));
   }
 
@@ -225,15 +228,24 @@
       // is why drafts are keyed by attempt.
       bag.listen(document, "submit", (e) => {
         if (!e.target || e.target.id !== "submit_quiz_form") return;
+        // One question at a time: Next and Previous submit this form too.
+        if (e.submitter && e.submitter.matches(".next-question, .previous-question")) return;
         setTimeout(() => { if (!e.defaultPrevented) deleteQuizDrafts().catch(() => {}); });
       }, true);
       // Back from a failed submit through the back/forward cache.
       bag.listen(window, "pageshow", (e) => { if (e.persisted) submitted = false; });
+      BC.util.onReady(() => BC.requestApply && BC.requestApply());
     });
 
-    pruneOld();
-    const draft = BC.storage.local && BC.storage.local.quizDrafts && BC.storage.local.quizDrafts[draftKey()];
-    if (draft && draft.answers && diffCount(draft) > 0) ensureBanner(draft);
+    // Offer the draft once, when the page has loaded. Saves wait 800 ms, so a
+    // check on every apply saw each new answer as a difference from the draft
+    // and offered to put the old one back.
+    if (document.readyState === "loading") return;
+    bag.once("offer", () => {
+      pruneOld();
+      const draft = BC.storage.local && BC.storage.local.quizDrafts && BC.storage.local.quizDrafts[draftKey()];
+      if (draft && draft.answers && diffCount(draft) > 0) ensureBanner(draft);
+    });
   }
 
   BC.registry.register({
