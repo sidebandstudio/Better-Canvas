@@ -47,7 +47,7 @@ test("rotation retries failed themes next period and selects current settings in
   const a = await feature(db, "rotation", "apply"), b = db.tab(); await b.storage.load();
   const BC = a.context.BC; load(a.context, "src/shared/themes.js");
   BC.testNow = Date.now(); vm.runInContext("Date.now = () => BC.testNow", a.context);
-  const errors = []; BC.diag = { push(_source, error) { errors.push(error); } }; BC.toast = { info() {} };
+  const errors = []; BC.diag = { push(_source, error) { errors.push(error); } }; BC.toast = { info() {}, error() {} };
   db.fail("quota"); BC.testAction(BC.storage.current); await assert.rejects(a.storage.update(() => {}), /quota/);
   await a.storage.updateLocal(() => {});
   assert.equal(errors.length, 1); assert.equal(db.data.bcLocal.lastRotation, undefined);

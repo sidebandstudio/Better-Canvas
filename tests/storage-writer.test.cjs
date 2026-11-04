@@ -89,3 +89,28 @@ test("background rejects foreign and missing sender ids before reads or writes",
   assert.equal(db.requests.length, 0);
   assert.equal(db.events.length, 0);
 });
+
+test("a settings write nobody waits for says when it fails, and a quick note waits for sticky notes", async () => {
+  const { database } = require("./storage-harness.cjs");
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const db = database(), page = domContext("", { chrome: db.client().chrome });
+  try {
+    load(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/storage.js");
+    const BC = page.context.BC, toasts = [];
+    BC.util.warn = () => {};
+    BC.toast = { error: (t) => toasts.push(t), info: (t) => toasts.push(t) };
+    await BC.storage.load();
+    db.fail("Quota exceeded");
+    const write = BC.storage.update((d) => { d.theming.darkMode = "on"; });
+    await write.catch(() => {});
+    assert.match(toasts.join(), /could not be saved: Quota exceeded/);
+    db.fail(null);
+    await BC.storage.update((d) => { d.productivity.stickyNotes = false; });
+    BC.registry = { register() {} };
+    load(page.context, "src/content/core/lifecycle.js", "src/content/features/productivity.js");
+    let writes = 0; const edit = BC.storage.updateLocal; BC.storage.updateLocal = (...a) => { writes++; return edit(...a); };
+    BC.quickNote();
+    assert.equal(writes, 0);
+    assert.match(toasts.at(-1), /Sticky notes are off/);
+  } finally { page.dom.window.close(); }
+});

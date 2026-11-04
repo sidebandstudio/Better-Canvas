@@ -251,13 +251,17 @@
 
     request, // The quiz saver uses the same background writer and error handling.
 
+    // Shortcuts, menus and switches call this without waiting, so a failed write
+    // has to say so here or it only reached the console.
     update(mutator) {
-      return queueSettings(async () => {
+      const result = queueSettings(async () => {
         await storage.load();
         const before = JSON.parse(savedSettings);
         const value = await transactSettings(mutator);
         return acceptSettings(value, before, current);
       });
+      result.catch(reportFailure);
+      return result;
     },
 
     // Mutators may run again after a conflict. Keep side effects outside them.

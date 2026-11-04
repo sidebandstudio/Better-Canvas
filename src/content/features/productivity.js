@@ -297,6 +297,8 @@
   }
 
   BC.quickNote = function () {
+    // The next apply would take a new note straight back off the page.
+    if (!((BC.storage.current && BC.storage.current.productivity) || {}).stickyNotes) { BC.toast.info("Sticky notes are off. Turn them on under Productivity."); return; }
     const id = BC.util.uuid();
     const note = { id, text: "", x: 120 + Math.random() * 80, y: 120 + Math.random() * 80 };
     editNotes((notes) => notes.concat(note)).then(() => buildNote(note)).catch(() => {});
