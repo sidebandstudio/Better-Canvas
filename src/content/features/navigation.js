@@ -173,7 +173,11 @@
     }
     // Pinned quick-switch bar at the top of the main content area (every page).
     const cards = (BC.cache && BC.cache.peek("GET " + location.origin + "/api/v1/dashboard/dashboard_cards")) || null;
-    if (!cards) return; // will populate after dashboard cards load
+    if (!cards) {
+      // The cards cache expires after a minute, so fetch them once per page.
+      BC.lifecycle.pageBag("course-tabs").once("cards", () => BC.api.dashboardCards().then(() => BC.requestApply && BC.requestApply(), () => {}));
+      return;
+    }
     const target = document.querySelector("#main");
     if (!target) return;
     BC.injector.setStyle("bc-course-tabs", `
