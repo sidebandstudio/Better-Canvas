@@ -142,7 +142,9 @@
     if (d.layout === "masonry") css += `
       ${reset}
       ${CARDS} { display: block !important; columns: ${Math.max(2, Math.floor(1200 / size))} ${size}px !important; column-gap: 14px !important; }
-      ${CARD} { display: block !important; width: 100% !important; margin: 0 0 14px !important; break-inside: avoid !important; }`;
+      ${CARD} { display: block !important; width: 100% !important; margin: 0 0 14px !important; break-inside: avoid !important; }
+      /* Hidden, finished and filtered-out cards are hidden inline. */
+      ${CARD}:is([style*="display: none"], [style*="display:none"]) { display: none !important; }`;
     return css;
   }
 

@@ -879,7 +879,7 @@
         sw("Hide finished courses", "autoHideConcluded", "Courses Canvas marks as concluded."),
       ]),
       sec("Cards", [
-        row({ label: "Layout", enabledWhen: on, control: C.segmented({ ariaLabel: "Card layout", get: () => d.layout, set: put((x, v) => { x.layout = v; }),
+        row({ label: "Layout", hint: "Masonry fills columns in Canvas's own card order, so your custom order doesn't apply there.", enabledWhen: on, control: C.segmented({ ariaLabel: "Card layout", get: () => d.layout, set: put((x, v) => { x.layout = v; }),
           options: [{ value: "grid", label: "Grid", icon: "grid" }, { value: "list", label: "List", icon: "list" }, { value: "masonry", label: "Masonry", icon: "columns" }, { value: "compact", label: "Compact", icon: "minus" }] }) }),
         row({ label: "Card size", enabledWhen: on, showWhen: (s) => s.dashboard.layout === "grid" || s.dashboard.layout === "masonry",
           control: C.segmented({ ariaLabel: "Card size", get: () => d.cardSize, set: put((x, v) => { x.cardSize = v; }),
