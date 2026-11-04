@@ -824,6 +824,23 @@ test("found on real Canvas: a failed module fetch waits instead of repeating on 
   assert.equal(calls, 1, "page updates after a failure don't refetch");
 });
 
+test("module progress stays off for a teacher, whose modules carry no completion", async () => {
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="content"><div id="context_module_1"><div class="header"></div></div></div>');
+  try {
+    const BC = context.BC = { features: {}, diag: { push() {} }, registry: { register: (f) => { BC.feature = f; } } };
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(_id, _host, factory) { return factory(); } };
+    let items = [{ id: 9, completion_requirement: { type: "must_view" } }];
+    BC.api = { courseModules: async () => [{ id: 1, items }] };
+    loadDom(context, "src/content/features/modules.js");
+    BC.feature.apply({ modules: { progressBars: true } }, { page: "modules", courseId: "7" }); await settle();
+    assert.equal(dom.window.document.querySelector(".bc-mod-summary"), null);
+    items = [{ id: 9, completion_requirement: { type: "must_view", completed: false } }];
+    BC.feature.apply({ modules: { progressBars: true } }, { page: "modules", courseId: "7" }); await settle();
+    assert.match(dom.window.document.querySelector(".bc-mod-sum").textContent, /0\/1/);
+  } finally { dom.window.close(); }
+});
+
 test("found on real Canvas: text on accent fills uses the accent's contrast colour", () => {
   const theming = fs.readFileSync(path.join(root, "src/content/features/theming.js"), "utf8");
   assert.match(theming, /\.Button--primary \{[^}]*color: var\(--bc-accent-contrast/);
