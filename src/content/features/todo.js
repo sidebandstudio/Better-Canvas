@@ -1280,6 +1280,9 @@
         it.planner_override = Object.assign({}, it.planner_override,
           saved && saved.id != null ? { id: saved.id } : null, { marked_complete: complete });
         state.localDone.set(keyForItem(it), { complete, id: it.planner_override.id, at: Date.now() });
+        // A refetch since this row was drawn left it holding an old copy of the
+        // item. The next render reads the fresh one, so that gets the change too.
+        overlayLocal(state.canvasItems);
         // Record only on success, so a failed write can't inflate the streak.
         return noteDone(keyForItem(it), complete).catch(() => {});
       })
@@ -1375,8 +1378,9 @@
   function deleteTask(it) {
     const keep = { title: itemTitle(it), todoDate: it.plannable_date, courseId: courseIdOf(it) || undefined,
       details: (it.plannable && it.plannable.details) || undefined };
+    const from = keyForItem(it);
     BC.api.deletePlannerNote(noteId(it)).then(() => {
-      state.canvasItems = state.canvasItems.filter((x) => x !== it);
+      state.canvasItems = state.canvasItems.filter((x) => keyForItem(x) !== from);
       state.lastFetchKey = "";
       state.fetchSeq++;
       state.fetchKey = "";

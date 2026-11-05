@@ -250,7 +250,7 @@ async function plannerContext(now) {
   const BC = page.context.BC;
   await BC.storage.load(); await BC.storage.loadLocal();
   vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8")
-    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus, defaultStart, rangeDays, fetchWindow, buildModel };\n  BC.registry.register({"), page.context);
+    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus, defaultStart, rangeDays, fetchWindow, buildModel, setComplete, deleteTask, go, state, keyForItem, mount: (m) => { mounted = m; } };\n  BC.registry.register({"), page.context);
   return { BC, page };
 }
 
@@ -966,4 +966,34 @@ test("scene themes tint only a transparent school logo, on a layer that keeps th
     BC.feature.apply(s); await settle(); await settle();
     assert.equal(html.hasAttribute("data-bc-logo-tint"), false, "an opaque logo keeps its own colours");
   } finally { dom.window.close(); }
+});
+
+test("checking off a planner row drawn before the last refetch updates the item the next render reads", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const item = () => ({ plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 6, 23, 59).toISOString(), course_id: "9" });
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItems: async () => [item()],
+      plannerItemDone: (it) => !!(it.planner_override && it.planner_override.marked_complete),
+      setPlannerComplete: async () => ({ id: 41 }) };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    const drawn = BC.test.state.items[0];
+    BC.test.state.fetchedAt = 0;   // the planner TTL ran out
+    await BC.test.fetchWindow(s, true);
+    assert.notEqual(BC.test.state.items[0], drawn);
+    assert.equal(await BC.test.setComplete(drawn, true), true);
+    assert.deepEqual(copy(BC.test.state.items[0].planner_override || null), { id: 41, marked_complete: true });
+
+    const note = () => ({ plannable_type: "planner_note", plannable_id: 3, plannable: { id: 3, title: "Call office" }, plannable_date: new Date(2026, 10, 6, 12).toISOString() });
+    BC.api.plannerItems = async () => [note()];
+    BC.api.deletePlannerNote = async () => null;
+    BC.toast = { info() {}, error() {} };
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    const old = BC.test.state.canvasItems[0];
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    BC.test.deleteTask(old); await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(copy(BC.test.state.canvasItems), []);
+  } finally { page.dom.window.close(); }
 });
