@@ -328,4 +328,7 @@ test("links clear 4.5:1 on every surface in both modes of every preset", () => {
     }
   }
   assert.deepEqual(short, []);
+  // A mid-grey page has no link colour that clears both it and white panels.
+  const grey = BC.tokens.resolve({ ...BC.defaults.theming, lightBg: "#777777" }).light;
+  assert.ok(C.contrastRatio(grey.link, grey["surface-2"]) >= 4.5, grey.link + " on " + grey["surface-2"]);
 });
