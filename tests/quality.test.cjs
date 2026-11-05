@@ -1071,3 +1071,26 @@ test("Tab from the workspace's last usable control wraps past switched-off rows"
     assert.notEqual(shadow.activeElement, usable);
   } finally { page.dom.window.close(); }
 });
+
+test("a text or colour field drops its warning once it shows the saved value again", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="root"></div>');
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/color.js", "src/content/core/ui.js", "src/shared/settings/components.js");
+    const C = context.BC.SettingsComponents, doc = dom.window.document;
+    let font = "Inter", colour = "#336699";
+    const text = C.text({ get: () => font, set: (v) => { font = v; }, validate: (v) => (v.split('"').length % 2 ? true : "Close any quotes.") });
+    const pick = C.color({ get: () => colour, set: (v) => { colour = v; } });
+    doc.getElementById("root").append(text, pick);
+    const typeInto = (input, value) => { input.value = value; input.dispatchEvent(new dom.window.Event("input", { bubbles: true })); };
+    typeInto(text.querySelector("input"), 'Inter, "Open');
+    typeInto(pick.querySelector(".bcs-color__hex"), "#zz");
+    assert.equal(text.classList.contains("bcs-invalid") && pick.classList.contains("bcs-invalid"), true);
+    C.bindings.sync({});
+    assert.equal(text.querySelector("input").value, "Inter");
+    assert.equal(text.classList.contains("bcs-invalid"), false);
+    assert.equal(text.querySelector(".bcs-text__warn").textContent, "");
+    assert.equal(pick.querySelector(".bcs-color__hex").value, "#336699");
+    assert.equal(pick.classList.contains("bcs-invalid"), false);
+  } finally { dom.window.close(); }
+});

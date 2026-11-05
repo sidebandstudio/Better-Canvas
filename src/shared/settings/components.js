@@ -130,7 +130,11 @@
     });
     wrap.append(inp, warn);
     // Never write into a field the user is typing in — that's what cost the caret.
-    bind(inp, () => { const v = get() ?? ""; if (!focused(inp) && inp.value !== String(v)) inp.value = String(v); });
+    // Putting the saved value back also takes away the warning about the old text.
+    bind(inp, () => {
+      const v = get() ?? "";
+      if (!focused(inp) && inp.value !== String(v)) { inp.value = String(v); warn.textContent = ""; wrap.classList.remove("bcs-invalid"); }
+    });
     return wrap;
   };
 
@@ -219,8 +223,10 @@
     // Dragging in the native picker fires input continuously — throttle the store
     // write and take the definitive value on change.
     const commit = BC.util.throttle((v) => set(v), 100);
+    // Anything that replaces the typed text with a real colour clears its warning.
+    const valid = () => wrap.classList.remove("bcs-invalid");
     swatch.addEventListener("click", () => picker.click());
-    picker.addEventListener("input", () => { text.value = picker.value; paint(picker.value); commit(picker.value); });
+    picker.addEventListener("input", () => { text.value = picker.value; valid(); paint(picker.value); commit(picker.value); });
     picker.addEventListener("change", () => set(picker.value));
     text.addEventListener("input", () => {
       const v = text.value.trim();
@@ -234,18 +240,18 @@
       const row = el("div", { class: "bcs-color__presets" }, presets.map((p) => {
         const b = el("button", { type: "button", class: "bcs-color__preset", title: p, "aria-label": "Use " + p });
         b.style.background = p;
-        b.addEventListener("click", () => { text.value = p; paint(p); set(p); });
+        b.addEventListener("click", () => { text.value = p; valid(); paint(p); set(p); });
         return b;
       }));
       kids.push(row);
     }
     if (allowEmpty) {
-      kids.push(BC.ui.iconButton("x", { label: "Clear color", size: "sm", onClick: () => { text.value = ""; paint(""); set(""); } }));
+      kids.push(BC.ui.iconButton("x", { label: "Clear color", size: "sm", onClick: () => { text.value = ""; valid(); paint(""); set(""); } }));
     }
     wrap.append(...kids);
     const sync = () => {
       const v = get() || "";
-      if (!focused(text) && text.value !== v) text.value = v;
+      if (!focused(text) && text.value !== v) { text.value = v; valid(); }
       paint(v);
     };
     sync();
