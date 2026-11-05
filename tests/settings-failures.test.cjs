@@ -187,3 +187,19 @@ test("reordering a filtered course list keeps the other courses where they were"
     assert.deepEqual(JSON.parse(JSON.stringify(store.get().dashboard.courseOrder)), ["1", "4", "3", "2"]);
   } finally { store.destroy(); dom.window.close(); }
 });
+
+
+test("the settings tabs skip their entrance animation when Reduce motion is on", async () => {
+  const { dom, context } = domContext('<div id="root"></div>', { chrome: { runtime: { getURL: (s) => s }, storage: { onChanged: { addListener() {} } } } });
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+  load(context, ...manifest.content_scripts[0].js.filter((file) => file !== "src/content/content.js"), ...settingsUIFiles());
+  const BC = context.BC;
+  BC.util.warn = () => {};
+  const state = BC.cloneDefaults();
+  state.theming.reducedMotion = true;
+  const store = BC.SettingsUI.render(dom.window.document.getElementById("root"), { getState: () => state, save: async () => {} });
+  try {
+    BC.SettingsUI.goto("files");
+    assert.equal(dom.window.document.querySelector(".bcs-main").classList.contains("bcs-main--still"), true);
+  } finally { store.destroy(); dom.window.close(); }
+});

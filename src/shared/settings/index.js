@@ -210,10 +210,12 @@
       }
 
       // `still` skips the entrance animation, for rebuilds the user didn't ask for
-      // (undo, reset, a change made in another tab).
+      // (undo, reset, a change made in another tab). Reduce motion skips it too: the
+      // page's data-bc-motion rule can't reach inside the drawer, and the options
+      // page never sets it.
       function showTab(id, still) {
         const tab = TABS.find((t) => t.id === id) || TABS[0];
-        main.classList.toggle("bcs-main--still", !!still);
+        main.classList.toggle("bcs-main--still", !!still || !!(store.get().theming || {}).reducedMotion);
         active = lastTab = tab.id;
         cancelDraft();
         const editing = EDIT_TABS.includes(active);
