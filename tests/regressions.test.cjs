@@ -361,3 +361,16 @@ test("the file library leaves out courses that hide Files instead of calling the
     assert.doesNotMatch(text, /couldn't load/i);
   } finally { dom.window.close(); }
 });
+
+
+test("pages under /dashboard/ such as ePortfolios are not the dashboard", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  for (const [where, page] of [["/", "dashboard"], ["/dashboard", "dashboard"], ["/dashboard/", "dashboard"], ["/dashboard/eportfolios", "other"], ["/dashboard/data_exports", "other"]]) {
+    const { dom, context } = domContext();
+    dom.reconfigure({ url: "http://bc-test.instructure.com" + where });
+    try {
+      load(context, "src/content/core/util.js", "src/content/core/detect.js");
+      assert.equal(context.BC.detect.context().page, page, where);
+    } finally { dom.window.close(); }
+  }
+});

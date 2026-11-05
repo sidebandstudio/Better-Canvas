@@ -7,7 +7,8 @@
 
   function pageFromPath(path) {
     if (!path) return "other";
-    if (path === "/" || path === "/dashboard" || path.startsWith("/dashboard")) return "dashboard";
+    // ePortfolios and data exports live under /dashboard/ too, as pages of their own.
+    if (path === "/" || /^\/dashboard\/?$/.test(path)) return "dashboard";
     if (/^\/courses\/\d+\/grades/.test(path)) return "grades";
     if (/^\/courses\/\d+\/gradebook/.test(path)) return "gradebook";
     if (/^\/courses\/\d+\/modules/.test(path)) return "modules";
