@@ -1026,3 +1026,24 @@ test("undoing a deleted task brings back its steps, note and tags under the new 
     ]);
   } finally { page.dom.window.close(); }
 });
+
+test("a planner page change that fails stays on the week still shown and says so", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const doc = page.dom.window.document, host = doc.body.appendChild(doc.createElement("div"));
+    BC.test.mount({ host, body: host.appendChild(doc.createElement("div")) });
+    const errors = [];
+    BC.toast = { error: (text) => errors.push(text), info() {}, success() {} };
+    BC.util.warn = () => {};
+    let fail = false;
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItemDone: () => false,
+      plannerItems: async () => { if (fail) throw Object.assign(Error("Canvas API 503"), { status: 503 }); return [{ plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 6, 23, 59).toISOString() }]; } };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    fail = true;
+    BC.test.go(1);
+    for (let i = 0; i < 20 && !errors.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(errors.length, 1);
+    assert.equal(BC.test.state.windowStart, null);
+  } finally { page.dom.window.close(); }
+});

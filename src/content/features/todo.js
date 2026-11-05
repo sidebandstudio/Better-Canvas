@@ -1052,7 +1052,7 @@
     }
     state.slide = dir || (state.slide || 0);
     state.lastFetchKey = "";
-    loadAndRender(s, true);
+    loadAndRender(s, true, true);
   }
 
   // ---- list view ------------------------------------------------------------
@@ -1970,7 +1970,7 @@
     return m;
   }
 
-  function loadAndRender(settings, force) {
+  function loadAndRender(settings, force, paging) {
     if (!mounted || !mounted.host.isConnected) return;
     if (!state.filterLoaded) {
       state.filterLoaded = true;
@@ -1985,7 +1985,17 @@
     loadCards();
     fetchWindow(settings, force).then(() => rerender(force)).catch((e) => {
       BC.util.warn("planner", e);
-      if (state.items.length) { rerender(force); return; }
+      if (state.items.length) {
+        // A page change that failed stays on the dates still shown, so the header
+        // and the next step match the list.
+        if (paging && state.range) {
+          const shown = state.range.start;
+          state.windowStart = +shown === +defaultStart(settings.todo) ? null : shown.toISOString();
+          BC.toast.error("Couldn't load those dates. Try again in a moment.");
+        }
+        rerender(force);
+        return;
+      }
       body.dataset.bcSig = "";
       body.replaceChildren(el("div", { class: "pl" }, [
         el("div", { class: "pl-head" }, [el("div", { class: "pl-titles" }, [el("h2", { class: "pl-title", text: "To Do" })])]),
