@@ -1094,3 +1094,20 @@ test("a text or colour field drops its warning once it shows the saved value aga
     assert.equal(pick.classList.contains("bcs-invalid"), false);
   } finally { dom.window.close(); }
 });
+
+test("dark mode lightens dark text on a see-through mid-tone background instead of pinning it", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<style>body { color: rgb(230, 230, 235); }</style>' +
+    '<div id="content"><div id="glass" style="background-color: rgba(199, 205, 209, 0.5); color: rgb(45, 59, 69)">Due <span id="inner" style="color: rgb(45, 59, 69)">Friday</span></div>' +
+    '<div id="solid" style="background-color: rgb(255, 217, 102); color: rgb(45, 59, 69)">chip</div></div>');
+  try {
+    loadDom(context, "src/content/core/darkengine.js");
+    dom.window.document.documentElement.classList.add("bc-dark");
+    context.BC.darkEngine.start();
+    const tag = (id) => dom.window.document.getElementById(id).getAttribute("data-bc-dfg");
+    assert.equal(tag("glass"), "t");
+    assert.equal(tag("inner"), "t");
+    assert.equal(tag("solid"), "k", "a solid mid-tone chip still pins dark text");
+    context.BC.darkEngine.stop();
+  } finally { dom.window.close(); }
+});

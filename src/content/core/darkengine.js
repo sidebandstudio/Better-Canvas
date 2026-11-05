@@ -200,9 +200,10 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
           r.hue = bucket(bg);
         }
       } else {
-        r.surf = L < MID ? "dark" : "light";
         // A solid mid-tone colour we leave as it is. A see-through one shows the
-        // dark page under it, where dark text would be unreadable.
+        // dark page under it, where dark text would be unreadable, so its text is
+        // treated as sitting on a dark surface.
+        r.surf = L < MID ? "dark" : bg.a >= 0.9 ? "light" : "3";
         r.chip = L >= MID && bg.a >= 0.9;
       }
     } else if (img) {
@@ -238,7 +239,7 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
       if (t) return t;
       const tag = p.getAttribute("data-bc-dbg");
       if (tag) return tag.charAt(0) === "h" ? "h" : tag;
-      return lum(bg) < MID ? "dark" : "light";
+      return lum(bg) < MID ? "dark" : bg.a >= 0.9 ? "light" : "3";
     }
     return "1";
   }
