@@ -1045,6 +1045,17 @@ test("a planner page change that fails stays on the week still shown and says so
     for (let i = 0; i < 20 && !errors.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(errors.length, 1);
     assert.equal(BC.test.state.windowStart, null);
+
+    // The same from an empty week, which shows no items.
+    fail = false; BC.api.plannerItems = async () => { if (fail) throw Object.assign(Error("Canvas API 503"), { status: 503 }); return []; };
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    assert.equal(BC.test.state.items.length, 0);
+    fail = true;
+    BC.test.go(1);
+    for (let i = 0; i < 20 && errors.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(errors.length, 2);
+    assert.equal(BC.test.state.windowStart, null);
   } finally { page.dom.window.close(); }
 });
 

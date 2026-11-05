@@ -1988,7 +1988,8 @@
     loadCards();
     fetchWindow(settings, force).then(() => rerender(force)).catch((e) => {
       BC.util.warn("planner", e);
-      if (state.items.length) {
+      // An empty week on screen still counts as shown.
+      if (state.items.length || (paging && state.range)) {
         // A page change that failed stays on the dates still shown, so the header
         // and the next step match the list.
         if (paging && state.range) {
