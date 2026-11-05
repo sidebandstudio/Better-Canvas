@@ -77,7 +77,8 @@
     // A held key repeats keydown. Toggles flipped on and off for as long as it was held.
     if (ev.repeat || fromDrawer(ev) || isTypingTarget(realTarget(ev))) return;
     const s = BC.storage && BC.storage.current;
-    if (!s || !s.shortcuts || !s.shortcuts.enabled) return;
+    // The bindings stay registered after Better Canvas is switched off.
+    if (!s || s.enabled === false || !s.shortcuts || !s.shortcuts.enabled) return;
 
     // Chord second key (e.g. "g d").
     if (chord) {

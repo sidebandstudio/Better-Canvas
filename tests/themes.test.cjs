@@ -13,6 +13,59 @@ function context() {
   return ctx;
 }
 
+test("every preset stays readable after the user flips dark mode, and old scene colours are repaired", () => {
+  const ctx = context();
+  for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
+  const { BC } = ctx, C = BC.color;
+  for (const p of BC.PRESET_THEMES) {
+    const t = { ...BC.defaults.theming, ...p.settings.theming };
+    const r = BC.tokens.resolve(t)[t.darkMode === "on" ? "light" : "dark"];
+    for (const surface of ["surface-1", "surface-2"]) assert.ok(C.contrastRatio(r.text, r[surface]) >= 4.5, p.id + " " + surface);
+  }
+  const equal = (experience, bg) => ({ experience, darkBg: bg, lightBg: bg });
+  const saved = BC.mergeDefaults({ version: 5, theming: equal("woodland", "#102f2b"), customThemes: [{ id: "t", settings: { theming: equal("gallery", "#efe2c8") } }] });
+  assert.equal(saved.theming.darkBg, "#102f2b");
+  assert.equal(saved.theming.lightBg, "");
+  assert.equal(saved.customThemes[0].settings.theming.darkBg, "");
+  assert.equal(saved.customThemes[0].settings.theming.lightBg, "#efe2c8");
+  // The repair runs once. A later choice of the same colour for both modes stays.
+  const chosen = BC.mergeDefaults({ version: BC.SETTINGS_VERSION, theming: equal("gallery", "#efe2c8") });
+  assert.equal(chosen.theming.darkBg, "#efe2c8");
+});
+
+test("old saved looks and theme files stop resetting accessibility settings and custom CSS", () => {
+  const { BC } = context();
+  const old = { theming: { ...BC.defaults.theming, accentColor: "#123456" }, cosmetics: { ...BC.defaults.cosmetics, customCss: "" } };
+  delete old.theming.rotation;
+  const s = BC.mergeDefaults({ version: 6, theming: { reducedMotion: true, colorBlind: "deuteranopia", fontSizeScale: "xl" },
+    cosmetics: { customCss: "a { color: red }" }, customThemes: [{ id: "fall", name: "Fall", settings: copy(old) }] });
+  const look = s.customThemes[0].settings;
+  for (const key of BC.THEME_KEEPS) assert.equal(key in look.theming, false, key);
+  assert.equal("customCss" in look.cosmetics, false);
+  assert.equal(look.theming.accentColor, "#123456");
+  BC.applyTheme(s, s.customThemes[0]);
+  assert.equal(s.theming.reducedMotion, true);
+  assert.equal(s.theming.colorBlind, "deuteranopia");
+  assert.equal(s.theming.fontSizeScale, "xl");
+  assert.equal(s.cosmetics.customCss, "a { color: red }");
+  const file = BC.cleanSavedLook(BC.themeOnly({ theming: { experience: "gallery", darkBg: "#efe2c8", lightBg: "#efe2c8", focusRing: "bold" }, cosmetics: { customCss: "" } }));
+  assert.deepEqual(copy(file), { theming: { experience: "gallery", darkBg: "", lightBg: "#efe2c8" }, cosmetics: {} });
+});
+
+test("font stacks with an unclosed quote are refused so they can't swallow later rules", () => {
+  const ctx = context();
+  for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
+  const safe = (v) => ctx.BC.tokens.safeFontStack(v);
+  assert.equal(safe('"Segoe UI", Inter, sans-serif'), '"Segoe UI", Inter, sans-serif');
+  assert.equal(safe("'Open Sans', serif"), "'Open Sans', serif");
+  assert.equal(safe('"Segoe UI, sans-serif'), "");
+  assert.equal(safe("Inter'"), "");
+  assert.equal(safe("Inter; } html{display:none}"), "");
+  assert.equal(safe('"微软雅黑", メイリオ, 맑은 고딕, Ελληνικά, sans-serif'), '"微软雅黑", メイリオ, 맑은 고딕, Ελληνικά, sans-serif');
+  assert.equal(safe("मंगल"), "मंगल");
+  assert.equal(safe("Noto: x"), "");
+});
+
 test("cursor settings draw the chosen shape, read the old Large value and survive theme changes", () => {
   const ctx = context();
   for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
@@ -161,6 +214,21 @@ test("full themes reset completely to defaults, preserve course preferences and 
   assert.deepEqual(copy(s.dashboard.courseOrder), ["3", "2"]);
 });
 
+test("applying a theme keeps custom CSS, the logo choice, sidebar width and dark schedule", () => {
+  const { BC } = context(), s = BC.cloneDefaults();
+  s.cosmetics.customCss = "a{color:red}";
+  s.theming.logo = { mode: "text", url: "", text: "NEU" };
+  s.theming.sidebarWidth = 220;
+  s.theming.darkSchedule = { start: "18:00", end: "06:30" };
+  for (const id of ["scene-gallery", "bc-default"]) BC.applyTheme(s, BC.PRESET_THEMES.find((p) => p.id === id));
+  assert.equal(s.cosmetics.customCss, "a{color:red}");
+  assert.deepEqual(copy(s.theming.logo), { mode: "text", url: "", text: "NEU" });
+  assert.equal(s.theming.sidebarWidth, 220);
+  assert.deepEqual(copy(s.theming.darkSchedule), { start: "18:00", end: "06:30" });
+  BC.applyTheme(s, { settings: { cosmetics: { customCss: "b{color:blue}" } } });
+  assert.equal(s.cosmetics.customCss, "b{color:blue}");
+});
+
 test("automatic rotation applies image collections without disabling future rotation", async () => {
   const ctx = context(), { BC } = ctx, state = BC.cloneDefaults();
   const theme = BC.PRESET_THEMES.find((p) => p.name === "Deep Space");
@@ -176,6 +244,18 @@ test("automatic rotation applies image collections without disabling future rota
   assert.equal(state.theming.rotation.enabled, true);
   feature.apply(state);
   await new Promise((r) => setImmediate(r));
+  assert.equal(writes, 1);
+});
+
+test("rotation to a deleted saved theme writes once and then waits for the next period", async () => {
+  const ctx = context(), { BC } = ctx, state = BC.cloneDefaults();
+  state.theming.rotation = { enabled: true, mode: "daily", themeIds: ["u-deleted"] };
+  let feature, writes = 0;
+  BC.registry = { register: (f) => { feature = f; } };
+  BC.storage = { local: {}, updateLocal: async (fn) => fn(BC.storage.local), update: async (fn) => { writes++; fn(state); } };
+  BC.toast = { info() {} }; BC.diag = { push(_, e) { throw e; } };
+  vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/rotation.js"), "utf8"), ctx);
+  for (let i = 0; i < 3; i++) { feature.apply(state); await new Promise((r) => setImmediate(r)); }
   assert.equal(writes, 1);
 });
 
@@ -216,4 +296,22 @@ test("theme API failures and rate limits reach the gallery as recoverable errors
   assert.match(result.error, /Wait a minute/);
   const empty = await bg.message({ type: "bc:themeSearch", query: " " });
   assert.match(empty.error, /Enter something/);
+});
+
+test("imported settings and themes can't turn a section or list into another type", () => {
+  const { BC } = context();
+  const s = BC.mergeDefaults({ version: BC.SETTINGS_VERSION, cosmetics: { background: null, customCss: "x" }, theming: { logo: "hide", darkSchedule: [] }, customThemes: "none" });
+  assert.equal(s.cosmetics.background.mode, BC.defaults.cosmetics.background.mode);
+  assert.equal(s.cosmetics.customCss, "x");
+  assert.equal(s.theming.logo.mode, BC.defaults.theming.logo.mode);
+  assert.equal(Array.isArray(s.customThemes), true);
+  BC.applyTheme(s, { settings: { cosmetics: { background: null }, theming: { accentColor: "#123456" } } });
+  assert.equal(typeof s.cosmetics.background, "object");
+  assert.equal(s.theming.accentColor, "#123456");
+  // A plain value can't become a list either, so a preset can still set it.
+  const broken = BC.mergeDefaults({ version: BC.SETTINGS_VERSION, theming: { darkMode: [] } });
+  assert.equal(broken.theming.darkMode, BC.defaults.theming.darkMode);
+  BC.applyTheme(broken, { settings: { theming: { darkMode: "on", radius: {} } } });
+  assert.equal(broken.theming.darkMode, "on");
+  assert.equal(broken.theming.radius, BC.defaults.theming.radius);
 });

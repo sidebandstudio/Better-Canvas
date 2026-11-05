@@ -14,7 +14,8 @@
   BC.PROFILES_KEY = "bcProfiles";
   // Theming settings that are about how someone uses Canvas, not how it looks, so
   // applying a theme keeps them unless the theme sets them itself.
-  BC.THEME_KEEPS = ["colorBlind", "reducedMotion", "fontSizeScale", "cursor", "cursorSize", "cursorColor", "focusRing"];
+  BC.THEME_KEEPS = ["colorBlind", "reducedMotion", "fontSizeScale", "cursor", "cursorSize", "cursorColor", "focusRing",
+    "darkSchedule", "sidebarWidth", "logo"];
 
   BC.GLOBAL_NAV_ITEMS = [
     { key: "global_nav_dashboard_link", label: "Dashboard" },
@@ -78,7 +79,7 @@
   };
 
   BC.defaults = {
-    version: 5,
+    version: 7,
     enabled: true,
     activeProfile: "default",
     firstRun: true,
@@ -374,6 +375,9 @@
     return data;
   };
 
+  // A list, a section or a plain value. An imported file can't change which.
+  BC.settingShape = (v) => Array.isArray(v) ? "list" : v && typeof v === "object" ? "section" : "value";
+
   BC.mergeDefaults = function (stored, carry) {
     const base = BC.cloneDefaults();
     if (!stored || typeof stored !== "object") return base;
@@ -381,6 +385,9 @@
     const merge = (target, src) => {
       for (const k of Object.keys(src)) {
         const sv = src[k];
+        // A backup with cosmetics.background: null stopped the settings page from
+        // opening, and theming.darkMode: [] couldn't be fixed by any theme.
+        if (target[k] !== undefined && BC.settingShape(target[k]) !== BC.settingShape(sv)) continue;
         if (Array.isArray(sv)) target[k] = sv;
         else if (sv && typeof sv === "object")
           target[k] = merge(target[k] && typeof target[k] === "object" ? target[k] : {}, sv);
@@ -466,7 +473,7 @@
     return target;
   };
 
-  BC.SETTINGS_VERSION = 5;
+  BC.SETTINGS_VERSION = 7;
 
   // Each entry upgrades settings from (v-1) to v. `carry` collects data that
   // must move to the bcLocal store — storage.load() persists it there.
@@ -540,6 +547,36 @@
       if (b.quickTask === "Mod+Shift+T") b.quickTask = "Alt+Shift+T";
       if (b.quickNote === "Mod+Shift+N") b.quickNote = "Alt+Shift+N";
     },
+
+    6(s) {
+      sceneColours(s.theming);
+      for (const theme of Array.isArray(s.customThemes) ? s.customThemes : []) sceneColours(theme && theme.settings && theme.settings.theming);
+    },
+
+    7(s) {
+      for (const theme of Array.isArray(s.customThemes) ? s.customThemes : []) BC.cleanSavedLook(theme && theme.settings);
+    },
+  };
+
+  // 3.3.3 and earlier gave scene themes one base colour for both modes, so
+  // switching modes put dark text on dark panels. Keep it for the scene's own
+  // mode. These five scenes are light, and the anime looks reuse scene ids.
+  function sceneColours(t) {
+    const light = ["alpine", "dunes", "gallery", "collage", "paper"];
+    if (t && t.experience && t.darkBg && t.darkBg === t.lightBg) t[light.includes(t.experience) ? "darkBg" : "lightBg"] = "";
+  }
+
+  // Saved looks and theme files from 3.3.3 and earlier copied every theming key
+  // and an empty customCss. Applying one undid the user's accessibility and
+  // layout settings and erased their CSS.
+  BC.cleanSavedLook = function (look) {
+    const t = look && look.theming;
+    if (t && typeof t === "object") {
+      for (const key of BC.THEME_KEEPS) delete t[key];
+      sceneColours(t);
+    }
+    if (look && look.cosmetics && look.cosmetics.customCss === "") delete look.cosmetics.customCss;
+    return look;
   };
 
   BC.migrate = function (s, carry) {

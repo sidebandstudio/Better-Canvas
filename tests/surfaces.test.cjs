@@ -26,7 +26,7 @@ async function surface(name, fail = false) {
 test("options first upgrade commits legacy history and planner metadata before edits", async () => {
   const s = await surface("options");
   try {
-    assert.equal(s.writes[0].bcSettings.version, 5);
+    assert.equal(s.writes[0].bcSettings.version, s.context.BC.SETTINGS_VERSION);
     assert.equal(s.writes[0].bcLocal.gradeHistory[7][0].score, 93);
     assert.equal(s.writes[0].bcLocal.todo.stars.a, true);
     await s.adapter.save(s.context.BC.cloneDefaults());

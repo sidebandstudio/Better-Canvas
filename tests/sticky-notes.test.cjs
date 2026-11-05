@@ -53,3 +53,32 @@ test("two independent productivity contexts edit different notes on the same pag
     assert.equal(b.dom.window.document.querySelector('[data-note-id="b"]'), null);
   } finally { a.BC.features.productivity.unmount(); b.BC.features.productivity.unmount(); a.dom.window.close(); b.dom.window.close(); }
 });
+
+test("a sticky note drags with a finger or pen and its delete button still works", async () => {
+  const key = "http://bc-test.instructure.com/";
+  const db = database({ bcLocal: { notes: { [key]: [{ id: "a", text: "A", x: 100, y: 100 }] } } });
+  const page = domContext("", { chrome: db.client().chrome });
+  try {
+    load(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
+    const BC = page.context.BC, W = page.dom.window;
+    BC.injector = { setStyle() {}, removeNode() {} }; BC.util.debounce = (fn) => fn;
+    await BC.storage.load();
+    load(page.context, "src/content/features/productivity.js");
+    BC.features.productivity.apply({ productivity: { stickyNotes: true, quickActions: false } });
+    await settle();
+    const head = W.document.querySelector(".bc-note-head");
+    const fire = (type, target, x, y, pointerId = 1) => target.dispatchEvent(new W.PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId, pointerType: "touch", clientX: x, clientY: y }));
+    fire("pointerdown", head, 110, 110); fire("pointermove", head, 160, 190);
+    // A second finger neither moves the note nor ends the first finger's drag.
+    fire("pointerdown", head, 400, 400, 2); fire("pointermove", head, 400, 400, 2); fire("pointerup", head, 400, 400, 2);
+    assert.equal(W.document.querySelector(".bc-note").style.left, "50px");
+    fire("pointerup", head, 160, 190);
+    await BC.storage.updateLocal(() => {});
+    // jsdom has no layout, so offsets start at 0 and the note lands at the 50px moved.
+    assert.equal(W.document.querySelector(".bc-note").style.left, "50px");
+    fire("pointerdown", W.document.querySelector(".bc-note-x"), 0, 0);
+    W.document.querySelector(".bc-note-x").click();
+    await BC.storage.updateLocal(() => {}); await settle();
+    assert.deepEqual(db.data.bcLocal.notes[key] || [], []);
+  } finally { page.dom.window.close(); }
+});

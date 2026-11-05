@@ -326,6 +326,7 @@
   background: transparent; color: inherit; opacity: .8; cursor: pointer; }
 .pl-block button:hover { opacity: 1; background: rgba(255,255,255,.2); }
 .pl-block .bc-icon { width: 12px; height: 12px; }
+.pl-grid.is-dragging .pl-block { pointer-events: none; }
 .pl-now { position: absolute; left: 40px; right: 0; height: 0; border-top: 2px solid var(--bc-danger, #b91c1c); pointer-events: none; }
 .pl-now::before { content: ""; position: absolute; left: -4px; top: -5px; width: 8px; height: 8px; border-radius: 50%; background: var(--bc-danger, #b91c1c); }
 
@@ -517,6 +518,9 @@
     assessment_request: "users",
   };
   const typeKey = (it) => (it.plannable_type === "bc_recurring" ? "planner_note" : it.plannable_type);
+  // Lectures, office hours and announcements aren't work that comes due, so they
+  // are never overdue.
+  const notDue = (it) => it.plannable_type === "calendar_event" || it.plannable_type === "announcement";
   const itemTitle = (it) => (it.plannable && it.plannable.title) || it.plannable_title || "Untitled";
   // Canvas gives relative paths; anything else must at least be http(s).
   function itemUrl(it) {
@@ -587,9 +591,11 @@
   function defaultStart(t) {
     const today = BC.dt.startOfDay(new Date());
     if (viewOf(t) === "timeblock") return today;
-    if (t.startOn === "sunday") return BC.dt.startOfWeek(today, false);
-    if (t.startOn === "monday") return BC.dt.startOfWeek(today, true);
-    return today;
+    if (t.startOn !== "sunday" && t.startOn !== "monday") return today;
+    // A window shorter than a week steps on from the week's start until it holds
+    // today. Otherwise "Show 3 days" left today out from Thursday on.
+    const week = BC.dt.startOfWeek(today, t.startOn === "monday"), n = rangeDays(t);
+    return BC.dt.addDays(week, Math.floor(Math.round((today - week) / BC.dt.DAY_MS) / n) * n);
   }
   function windowStart(t) {
     return state.windowStart ? BC.dt.startOfDay(state.windowStart) : defaultStart(t);
@@ -662,7 +668,8 @@
         state.cards.set(String(c.id), { name: c.shortName || c.originalName || "", code: c.courseCode || "", color: c.color || "" });
       }
       state.cardsState = "done";
-      rerender(false);
+      // Before the first planner fetch lands, a render would say "all caught up".
+      if (state.range) rerender(false);
     }).catch(() => { state.cardsState = "failed"; });
   }
 
@@ -729,7 +736,7 @@
         m.expired.push(k);
       }
       if (d >= r.start && d < r.end) m.windowItems.push(it);
-      else if (r.overdue && d < r.start && !isComplete(it)) m.overdue.push(it);
+      else if (r.overdue && d < r.start && !isComplete(it) && !notDue(it)) m.overdue.push(it);
       // Older work you checked off here recently stays reachable in Done, so an
       // accidental check on an overdue item can still be undone.
       else if (d < r.start && isComplete(it) && doneAt[k] && now - doneAt[k] < 7 * BC.dt.DAY_MS) m.recentDone.push(it);
@@ -979,7 +986,7 @@
     for (const it of model ? model.windowItems : []) {
       if (isComplete(it)) continue;
       const d = itemDate(it).getTime();
-      if (d < Date.now() && d < today) late++;
+      if (d < Date.now() && d < today) { if (!notDue(it)) late++; }
       else if (d >= today && d < tomorrow) todayN++;
     }
     const kids = [];
@@ -1161,8 +1168,9 @@
     }
     if (lead.length) grp(lead, "pl-meta__course");
     if (rd.time !== false && due) {
-      const late = !done && due.getTime() < Date.now();
-      const soon = !done && !late && due.getTime() - Date.now() < 3 * 3600000;
+      const past = due.getTime() < Date.now();
+      const late = !done && past && !notDue(it);
+      const soon = !done && !past && due.getTime() - Date.now() < 3 * 3600000;
       // Inside a day group the header already says the day.
       const label = t.dueFormat === "absolute" ? due.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " - " + shortTime(due) : extra && extra.timeOnly ? shortTime(due) : dueLabel(due);
       grp([el("span", { class: "pl-due" + (late ? " pl-due--late" : soon ? " pl-due--soon" : ""), text: label,
@@ -1589,6 +1597,12 @@
       dragSource(block, key);
       grid.append(block);
     }
+    // Blocks cover their hour rows, so during a drag they let it through to the
+    // hour underneath. The class waits a tick, because restyling the source
+    // inside dragstart can cancel the drag.
+    let dragging = false;
+    body.addEventListener("dragstart", () => { dragging = true; setTimeout(() => grid.classList.toggle("is-dragging", dragging)); }, true);
+    for (const type of ["dragend", "drop"]) body.addEventListener(type, () => { dragging = false; grid.classList.remove("is-dragging"); }, true);
     if (ymd === BC.dt.ymd(today)) {
       const now = new Date();
       const mins = now.getHours() * 60 + now.getMinutes();
@@ -2027,7 +2041,8 @@
     BC.storage.updateLocal((d) => {
       const prev = d.pomodoro || {};
       d.pomodoro = {
-        phase: "work", cycle: prev.cycle || 0,
+        // A stopped timer starts a new set, so its long break isn't early.
+        phase: "work", cycle: prev.phase ? prev.cycle || 0 : 0,
         startedAt: Date.now(), endsAt: Date.now() + min * 60000,
         taskTitle: taskTitle || "", sessions: prev.sessions || [],
       };

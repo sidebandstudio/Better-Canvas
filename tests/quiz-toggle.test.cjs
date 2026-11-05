@@ -67,3 +67,34 @@ test("disabling quiz draft saving removes listeners, cancels saves and guards al
     BC.features.quizsaver.unmount(); change(); assert.equal(timers.size, 0);
   } finally { dom.window.close(); }
 });
+
+test("the quiz restore banner is offered only when the page opens, and Next keeps the drafts", async () => {
+  const { database } = require("./storage-harness.cjs"), { settle } = require("./audit-helpers.cjs");
+  const key = "/courses/1/quizzes/2/take/questions/5";
+  const db = database({ bcLocal: { quizDrafts: { [key]: { savedAt: Date.now(), answers: { "q1:a": true, essay: "<p>old</p>" } } } } });
+  const client = db.client();
+  const page = domContext('<div id="content"><form id="submit_quiz_form"><div id="questions">' +
+    '<input type="radio" name="q1" value="a" checked><input type="radio" name="q1" value="b">' +
+    '<textarea class="question_input" name="essay"></textarea></div><button type="submit" class="next-question">Next</button></form></div>', { chrome: client.chrome });
+  try {
+    page.dom.reconfigure({ url: "http://bc-test.instructure.com" + key });
+    load(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
+    const BC = page.context.BC, doc = page.dom.window.document;
+    await BC.storage.load(); await BC.storage.loadLocal();
+    BC.injector = { setStyle() {}, removeNode(id) { doc.querySelector('[data-bc-node="' + id + '"]')?.remove(); },
+      ensureNode(id, _host, factory) { const node = doc.querySelector('[data-bc-node="' + id + '"]') || factory(); node.dataset.bcNode = id; return node; } };
+    load(page.context, "src/content/features/quizsaver.js");
+    const settings = BC.cloneDefaults(); settings.productivity.quizDraftSaver = true;
+    const apply = () => BC.features.quizsaver.apply(settings, { path: key });
+    apply();
+    assert.equal(doc.querySelector(".bc-quiz-banner"), null, "the essay editor's textarea isn't compared");
+    const b = doc.querySelector('[value="b"]');
+    b.checked = true; b.dispatchEvent(new page.dom.window.Event("change", { bubbles: true }));
+    apply();
+    assert.equal(doc.querySelector(".bc-quiz-banner"), null, "a new answer waiting to be saved isn't offered back");
+    const W = page.dom.window;
+    doc.getElementById("submit_quiz_form").dispatchEvent(new W.SubmitEvent("submit", { bubbles: true, cancelable: true, submitter: doc.querySelector(".next-question") }));
+    await new Promise((r) => page.dom.window.setTimeout(r, 0)); await settle();
+    assert.ok(db.data.bcLocal.quizDrafts[key], "Next isn't a final submit");
+  } finally { page.context.BC.features.quizsaver.unmount(); page.dom.window.close(); }
+});

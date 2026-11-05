@@ -89,8 +89,10 @@
     return result;
   }
 
-  BC.grades.computeTotal = function (groups) {
-    const weighted = groups.some((g) => g.group_weight);
+  // Canvas keeps group weights after a teacher turns weighting off, so pass the
+  // course's apply_assignment_group_weights when it's known.
+  BC.grades.computeTotal = function (groups, weights) {
+    const weighted = weights !== false && groups.some((g) => g.group_weight);
     let earned = 0, possible = 0;
     for (const group of groups) {
       const { pts, poss } = groupTotal(group);
@@ -98,6 +100,8 @@
         if (poss > 0) { earned += pts / poss * (group.group_weight || 0); possible += group.group_weight || 0; }
       } else { earned += pts; possible += poss; }
     }
+    // Like Canvas, weights only scale up when the graded groups add to under 100.
+    if (weighted && possible >= 100) return earned;
     return possible > 0 ? earned / possible * 100 : null;
   };
 
@@ -135,14 +139,19 @@
     return BC.api.assignmentGroups(courseId);
   }
 
-  // Same rule as the dashboard pill and notifications: current score, else final.
-  function canvasScore(courseId) {
-    return Promise.resolve().then(() => BC.api.coursesWithScores()).then((list) => {
+  // Canvas's score (the same one the dashboard pill and notifications use) and
+  // whether the course weights its assignment groups. A past course isn't in the
+  // active list, but its weighting still counts.
+  function courseInfo(courseId) {
+    return Promise.resolve().then(() => BC.api.coursesWithScores()).then(async (list) => {
       const c = list.find((x) => String(x.id) === String(courseId));
-      const e = (c && c.enrollments || [])[0] || {};
-      const s = e.computed_current_score != null ? e.computed_current_score : e.computed_final_score;
-      return s == null ? null : Number(s);
-    }).catch(() => null);
+      const weights = c ? c.apply_assignment_group_weights
+        : await BC.api.course(courseId).then((x) => x && x.apply_assignment_group_weights, () => undefined);
+      return { score: c ? BC.api.courseScore(c) : null, weights };
+    }).catch(() => ({ score: null }));
+  }
+  function courseData(courseId) {
+    return Promise.all([ensureGroups(courseId), courseInfo(courseId)]);
   }
 
   const finalInputs = new Map();   // courseId -> the "need on final" inputs as typed
@@ -212,12 +221,13 @@
       return d;
     });
     if (!panel.childElementCount) panel.replaceChildren(BC.ui.skeleton(4));
-    Promise.all([ensureGroups(courseId), canvasScore(courseId)]).then(([groups, canvas]) => {
+    courseData(courseId).then(([groups, info]) => {
       // Canvas's own current score, the number the dashboard, goal alerts and
       // history use too. Our estimate only fills in when Canvas hides it.
-      const total = canvas != null ? canvas : BC.grades.computeTotal(groups);
+      const canvas = info.score;
+      const total = canvas != null ? canvas : BC.grades.computeTotal(groups, info.weights);
       const estimated = canvas == null && total != null;
-      const hasWeights = groups.some((g) => g.group_weight);
+      const hasWeights = info.weights !== false && groups.some((g) => g.group_weight);
       const goal = BC.gradeNumber(((settings.grades.goals || {})[courseId] || {}).target);
       const missing = [];
       for (const g of groups) for (const a of (g.assignments || [])) {
@@ -227,12 +237,10 @@
 
       recordHistory(courseId, total);
 
-      // History plus a virtual point for today (the write above lands async).
+      // History with today's point set to this total (the write above lands async).
       let hist = ((BC.storage.local && BC.storage.local.gradeHistory) || {})[courseId] || [];
       const today = BC.dt.ymd(new Date());
-      if (total != null && !hist.some((e) => e.date === today)) {
-        hist = hist.concat([{ date: today, score: +total.toFixed(3) }]);
-      }
+      if (total != null) hist = hist.filter((e) => e.date !== today).concat([{ date: today, score: +total.toFixed(3) }]);
 
       // Skip the rebuild when nothing changed or while the user is typing in the panel.
       const sig = [courseId, total == null ? "" : total.toFixed(3), estimated ? 1 : 0, goal, missing.length, hist.length,
@@ -313,18 +321,19 @@
 
   // ---- Rubric predictor (assignment pages) ----
 
-  function computeTotalWith(groups, assignmentId, score) {
+  function computeTotalWith(groups, assignmentId, score, weights) {
     const cloned = groups.map((g) => !(g.assignments || []).some((a) => String(a.id) === String(assignmentId)) ? g : Object.assign({}, g, {
       assignments: (g.assignments || []).map((a) =>
         String(a.id) === String(assignmentId) ? Object.assign({}, a, { submission: { score } }) : a),
     }));
-    return BC.grades.computeTotal(cloned);
+    return BC.grades.computeTotal(cloned, weights);
   }
 
-  function buildRubricUI(panel, asn, rubric, groups, courseId) {
+  function buildRubricUI(panel, asn, rubric, groups, courseId, weights) {
     const aid = String(asn.id);
     const draft = ((BC.storage.local && BC.storage.local.rubricDrafts) || {})[aid] || {};
-    const assessment = asn.rubric_assessment || {};
+    // Canvas puts the graded rubric on the embedded submission.
+    const assessment = (asn.submission && asn.submission.rubric_assessment) || {};
     const maxTotal = rubric.reduce((s, c) => s + (c.points || 0), 0);
 
     let rows = "";
@@ -360,7 +369,7 @@
 
     const totalEl = panel.querySelector("[data-total]");
     const impactEl = panel.querySelector("[data-impact]");
-    const current = groups ? BC.grades.computeTotal(groups) : null;
+    const current = groups ? BC.grades.computeTotal(groups, weights) : null;
     function refresh() {
       let sum = 0;
       for (const row of panel.querySelectorAll(".bc-rubric-crit")) {
@@ -373,7 +382,7 @@
       if (groups) {
         const points = asn.points_possible || maxTotal;
         const scaled = maxTotal > 0 ? (sum / maxTotal) * points : 0;
-        const projected = computeTotalWith(groups, aid, scaled);
+        const projected = computeTotalWith(groups, aid, scaled, weights);
         if (projected != null) {
           impactEl.textContent = `Course grade if scored: ${projected.toFixed(2)}%` +
             (current != null ? ` (now ${current.toFixed(2)}%)` : "");
@@ -406,11 +415,12 @@
     panel.replaceChildren(BC.ui.skeleton(3));
     Promise.all([
       BC.api.assignment(courseId, assignmentId),
-      ensureGroups(courseId).catch(() => null),
-    ]).then(([asn, groups]) => {
-      const rubric = asn && asn.rubric;
-      if (!rubric || !rubric.length) { BC.injector.removeNode("bc-rubric"); return; }
-      buildRubricUI(panel, asn, rubric, groups, courseId);
+      courseData(courseId).catch(() => [null, {}]),
+    ]).then(([asn, [groups, info]]) => {
+      // Criteria marked "only for feedback" don't count toward the score.
+      const rubric = ((asn && asn.rubric) || []).filter((c) => !c.ignore_for_scoring);
+      if (!rubric.length) { BC.injector.removeNode("bc-rubric"); return; }
+      buildRubricUI(panel, asn, rubric, groups, courseId, info.weights);
     }).catch((e) => {
       BC.util.warn("rubric", e);
       panel.dataset.bcBuilt = "";
@@ -418,30 +428,33 @@
     });
   }
 
-  // Keyed by course AND day: a Set of course ids alone meant a tab left open across
-  // midnight never recorded the new day's score.
-  const historyRecorded = new Set();
   // Exported so the background notification scan can record history for EVERY
   // course, not just ones whose grades page happens to get visited. That single
   // caller is what makes the trend chart, dashboard sparklines and the Insights tab
   // actually accumulate data.
   BC.grades.recordScore = function (courseId, total) { return recordHistory(String(courseId), total); };
+  // What this tab last saw recorded. A repeat from its own API cache would
+  // otherwise replace a newer grade another tab had just recorded for today.
+  const recorded = new Map();
   // Days are LOCAL calendar days. toISOString() is UTC, so in the Americas the "day"
   // rolled over in the late afternoon and an evening visit was filed under tomorrow.
   function recordHistory(courseId, total) {
+    if (total == null) return;
     const today = BC.dt.ymd(new Date());
-    const key = courseId + ":" + today;
-    if (total == null || historyRecorded.has(key)) return;
+    const score = +total.toFixed(3), seen = today + "|" + score;
+    if (recorded.get(courseId) === seen) return;
     // Today's point is usually there already, from an earlier page. Each page load
-    // used to make a storage round trip per course to find that out.
+    // used to make a storage round trip per course to find that out. Other tabs
+    // keep it current, so a grade posted later the same day still replaces it.
     const known = ((BC.storage.local && BC.storage.local.gradeHistory) || {})[courseId];
-    if (Array.isArray(known) && known.some((e) => e.date === today)) { historyRecorded.add(key); return; }
+    if (Array.isArray(known) && known.some((e) => e.date === today && e.score === score)) { recorded.set(courseId, seen); return; }
     return BC.storage.updateLocal((d) => {
       const gh = (d.gradeHistory = d.gradeHistory || {});
       const arr = gh[courseId] || [];
-      if (!arr.some((e) => e.date === today)) arr.push({ date: today, score: +total.toFixed(3) });
+      const entry = arr.find((e) => e.date === today);
+      if (entry) entry.score = score; else arr.push({ date: today, score });
       gh[courseId] = arr.slice(-90);
-    }).then(() => { historyRecorded.add(key); }).catch(() => {});
+    }).then(() => { recorded.set(courseId, seen); }, () => {});
   }
 
   function apply(settings, ctx) {

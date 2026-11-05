@@ -22,8 +22,7 @@
       getCourses: () => BC.api.dashboardCards().then((cards) => cards.map((c) => ({ id: String(c.id), name: c.shortName || c.originalName || c.courseCode || ("Course " + c.id), code: c.courseCode || "", color: c.color || "" }))),
       getGpaData: () => BC.api.coursesWithScores().then((courses) => courses.map((c) => {
         const enr = (c.enrollments || [])[0] || {};
-        const score = enr.computed_current_score != null ? enr.computed_current_score : enr.computed_final_score;
-        return { id: String(c.id), name: c.name || c.course_code || ("Course " + c.id), score: score == null ? null : Number(score), concluded: c.concluded === true || enr.enrollment_state === "completed" };
+        return { id: String(c.id), name: c.name || c.course_code || ("Course " + c.id), score: BC.api.courseScore(c), concluded: c.concluded === true || enr.enrollment_state === "completed" };
       })),
     };
   }

@@ -44,7 +44,7 @@
       box-shadow: var(--bc-shadow-2, 0 4px 12px rgba(0,0,0,.14));
       resize: both; overflow: auto;
     }
-    .bc-note-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--bc-text-2xs, 11px); margin-bottom: 4px; cursor: move; }
+    .bc-note-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--bc-text-2xs, 11px); margin-bottom: 4px; cursor: move; touch-action: none; }
     .bc-note textarea { width: 100%; min-height: 60px; border: 0; background: transparent; resize: none; outline: none; font-family: inherit; }
     .bc-note-x { background: none; border: 0; cursor: pointer; }
 
@@ -216,15 +216,20 @@
   // and never remove them, while renderNotes rebuilt every note on every tick:
   // ~10 new permanent mousemove handlers per second, which froze the tab within
   // a minute of browsing.
-  let dragEl = null, dragOx = 0, dragOy = 0;
+  let dragEl = null, dragOx = 0, dragOy = 0, dragPointer = null;
   function installNoteDrag() {
     const bag = BC.lifecycle.pageBag("productivity");
     bag.once("note-drag", () => {
-      bag.listen(document, "mousedown", (e) => {
+      // Pointer events, so a finger or pen drags too. Capture keeps the moves and
+      // the release coming when the pointer leaves the window.
+      bag.listen(document, "pointerdown", (e) => {
         const head = e.target.closest && e.target.closest(".bc-note-head");
-        if (!head) return;
+        // One pointer drags at a time. A second finger is ignored until it ends.
+        if (!head || dragEl || e.button !== 0 || e.target.closest("button")) return;
         dragEl = head.closest(".bc-note");
         if (!dragEl) return;
+        dragPointer = e.pointerId;
+        if (head.setPointerCapture) head.setPointerCapture(e.pointerId);
         // page*, not client*: notes are absolutely positioned in DOCUMENT
         // coordinates, so on a scrolled page the viewport-relative offset made the
         // note jump by the scroll distance the moment a drag started.
@@ -232,18 +237,20 @@
         dragOy = e.pageY - dragEl.offsetTop;
         e.preventDefault();
       });
-      bag.listen(document, "mousemove", (e) => {
-        if (!dragEl) return;
+      bag.listen(document, "pointermove", (e) => {
+        if (!dragEl || e.pointerId !== dragPointer) return;
         dragEl.style.left = (e.pageX - dragOx) + "px";
         dragEl.style.top = (e.pageY - dragOy) + "px";
       });
-      bag.listen(document, "mouseup", () => {
-        if (!dragEl) return;
+      const drop = (e) => {
+        if (!dragEl || e.pointerId !== dragPointer) return;
         const el = dragEl, id = el.dataset.noteId;
         dragEl = null;
         const x = el.offsetLeft, y = el.offsetTop;
         editNotes((notes) => notes.map((n) => n.id === id ? { ...n, x, y } : n));
-      });
+      };
+      bag.listen(document, "pointerup", drop);
+      bag.listen(document, "pointercancel", drop);
     });
   }
 
@@ -297,6 +304,8 @@
   }
 
   BC.quickNote = function () {
+    // The next apply would take a new note straight back off the page.
+    if (!((BC.storage.current && BC.storage.current.productivity) || {}).stickyNotes) { BC.toast.info("Sticky notes are off. Turn them on under Productivity."); return; }
     const id = BC.util.uuid();
     const note = { id, text: "", x: 120 + Math.random() * 80, y: 120 + Math.random() * 80 };
     editNotes((notes) => notes.concat(note)).then(() => buildNote(note)).catch(() => {});

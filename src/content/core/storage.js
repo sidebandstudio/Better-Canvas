@@ -61,7 +61,9 @@
             }
             // The drawer previews unsaved edits immediately. A storage read must
             // not replace that preview with its previous saved snapshot.
-            if (current && JSON.stringify(current) !== savedSettings) continue;
+            // Compare values, not strings: the same settings in another key
+            // order read as an unsaved edit and this tab stopped following.
+            if (current && !BC.util.deepEqual(JSON.parse(JSON.stringify(current)), JSON.parse(savedSettings))) continue;
             current = BC.mergeDefaults(res && res[KEY]);
             savedSettings = JSON.stringify(current);
             for (const cb of listeners) BC.util.guard(() => cb(current), "storage");
@@ -249,13 +251,17 @@
 
     request, // The quiz saver uses the same background writer and error handling.
 
+    // Shortcuts, menus and switches call this without waiting, so a failed write
+    // has to say so here or it only reached the console.
     update(mutator) {
-      return queueSettings(async () => {
+      const result = queueSettings(async () => {
         await storage.load();
         const before = JSON.parse(savedSettings);
         const value = await transactSettings(mutator);
         return acceptSettings(value, before, current);
       });
+      result.catch(reportFailure);
+      return result;
     },
 
     // Mutators may run again after a conflict. Keep side effects outside them.

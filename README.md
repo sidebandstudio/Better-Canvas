@@ -126,7 +126,7 @@ Three modes:
 
 ### Data
 - Export / import all settings.
-- Reset all options. Recurring tasks, tags, grade goals, GPA credits, saved themes, custom links, course nicknames and planner data are kept.
+- Reset all options. Recurring tasks, tags, grade goals, GPA credits, saved themes, custom links, course nicknames, starred files and planner data are kept.
 - Undo/redo history (last 30 changes) inside the settings drawer. A burst of typing in one field is one step.
 
 ---

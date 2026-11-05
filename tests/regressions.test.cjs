@@ -199,6 +199,18 @@ test("a commit from this tab during a theme preview reaches the drawer, so later
   assert.equal(a.storage.current.cosmetics.motion, "snow");
 });
 
+test("settings that match storage in another key order still follow external changes", async () => {
+  const mock = storageMock(), a = mock.tab(), b = mock.tab();
+  await Promise.all([a.storage.load(), b.storage.load()]);
+  a.storage.adopt(Object.fromEntries(Object.entries(copy(a.storage.current)).reverse()));
+  const next = copy(b.storage.current);
+  next.theming.darkMode = "on";
+  await b.storage.save(next);
+  a.deliver(mock.events.at(-1));
+  for (let i = 0; i < 5; i++) await settle();
+  assert.equal(a.storage.current.theming.darkMode, "on");
+});
+
 test("a no-op local save does not hide a later external change", async () => {
   const mock = storageMock(), a = mock.tab(), b = mock.tab();
   await Promise.all([a.storage.load(), b.storage.load()]);
@@ -266,4 +278,24 @@ test("serialized local updates and snapshot saves retain unrelated records and p
   assert.equal(reader.storage.local.notes.last, "Queued note");
   assert.equal(reader.storage.local.todo.stars.other, true);
   assert.equal(mock.persisted.bcLocal.notes.old, undefined, "3.3.0 reads current data directly");
+});
+
+test("focus returns into a shadow root after a dialog, and palette clicks keep focus in its input", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="host"></div><div id="box"><button>Inside</button></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/commandPalette.js");
+    const doc = dom.window.document, host = doc.getElementById("host");
+    const opener = host.attachShadow({ mode: "open" }).appendChild(doc.createElement("button"));
+    opener.focus();
+    const trap = context.BC.ui.focusTrap(doc.getElementById("box"), { initial: doc.querySelector("#box button") });
+    assert.equal(doc.activeElement.textContent, "Inside");
+    trap.release();
+    assert.equal(host.shadowRoot.activeElement, opener);
+    context.BC.palette.open();
+    const list = doc.querySelector(".bc-cp-list");
+    const down = new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    list.dispatchEvent(down);
+    assert.equal(down.defaultPrevented, true);
+  } finally { dom.window.close(); }
 });

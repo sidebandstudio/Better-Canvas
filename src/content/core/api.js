@@ -86,8 +86,10 @@
       if (!it) return false;
       const o = it.planner_override;
       if (o && typeof o.marked_complete === "boolean") return o.marked_complete;
+      // Peer reviews carry no submission. A teacher's redo request reopens one.
+      if (it.plannable_type === "assessment_request") return !!(it.plannable && it.plannable.workflow_state === "completed");
       const s = it.submissions;
-      return !!(s && (s.submitted || s.graded));
+      return !!(s && !s.redo_request && (s.submitted || s.graded));
     },
     async getJSON(path, { ttl } = {}) {
       const url = path.startsWith("http") ? path : base + path;
@@ -133,6 +135,17 @@
         "&include[]=total_scores&include[]=concluded&include[]=term&per_page=100",
         { maxPages: 20, ttl: TTL.courses }
       );
+    },
+
+    // The score Canvas shows the student for a course from coursesWithScores.
+    // The final score counts ungraded work as zero, so before anything is graded
+    // it reads 0% while the current score is null. It only stands in once the
+    // course is over.
+    courseScore(c) {
+      const e = ((c && c.enrollments) || [])[0] || {};
+      let s = e.computed_current_score;
+      if (s == null && (c.concluded === true || e.enrollment_state === "completed")) s = e.computed_final_score;
+      return s == null || s === "" || !Number.isFinite(Number(s)) ? null : Number(s);
     },
 
     // Past-term courses. enrollment_state=active above leaves them out.
@@ -187,11 +200,16 @@
       );
     },
 
-    courseModules(courseId) {
-      return api.getList(
+    async courseModules(courseId) {
+      const mods = await api.getList(
         `/api/v1/courses/${courseId}/modules?include[]=items&per_page=50`,
         { maxPages: 10, ttl: TTL.modules }
       );
+      // Canvas leaves out the items of a module it thinks is too big to inline.
+      await Promise.all(mods.filter((m) => !m.items && m.items_count).map(async (m) => {
+        m.items = await api.getList(`/api/v1/courses/${courseId}/modules/${m.id}/items?per_page=100`, { maxPages: 10, ttl: TTL.modules });
+      }));
+      return mods;
     },
 
     course(courseId) {

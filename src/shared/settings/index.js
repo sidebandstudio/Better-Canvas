@@ -71,6 +71,22 @@
       // A version number alone isn't enough: other exports have one too.
       return SETTINGS_SECTIONS.some((k) => isObj(j[k])) || (typeof j.version === "number" && typeof j.enabled === "boolean") ? "settings" : null;
     },
+    // Local data with an old settings file's carry-over filled in. This device's
+    // entries win, but the old file's stars, steps and other per-task maps still
+    // land when the planner here already has data of its own.
+    withCarry(base, carry) {
+      const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+      const fill = (to, from) => {
+        for (const k of Object.keys(from)) {
+          if (to[k] === undefined) to[k] = from[k];
+          else if (isObj(to[k]) && isObj(from[k])) fill(to[k], from[k]);
+        }
+        return to;
+      };
+      const out = fill(BC.cleanData(base || {}), BC.cleanData(carry.local || {}));
+      if (carry.gradeHistory) out.gradeHistory = Object.assign({}, carry.gradeHistory, out.gradeHistory || {});
+      return out;
+    },
     render(root, adapter, opts) {
       const o = opts || {};
       if (root.dispose) root.dispose();
@@ -293,7 +309,7 @@
 
   // ---- shared bits ----------------------------------------------------------
 
-  const RESET_HINT = "Puts every option back to its default. Keeps your recurring tasks, tags, grade goals, GPA credits, saved themes, custom links, course nicknames and planner data.";
+  const RESET_HINT = "Puts every option back to its default. Keeps your recurring tasks, tags, grade goals, GPA credits, saved themes, custom links, course nicknames, starred files and planner data.";
   function confirmReset(store) {
     if (confirm("Reset every Better Canvas option to its default?\n\n" + RESET_HINT.replace(/^.*?\. /, ""))) store.reset();
   }
@@ -361,12 +377,15 @@
         row({ label: "Custom dark background", hint: "Replaces the palette's background color.",
           control: C.color({ ariaLabel: "Custom dark background", allowEmpty: true, get: () => t.darkBg, set: put((x, v) => { x.darkBg = v; }) }) }),
         fallbackNotice(store),
-        row({ label: "Light palette", control: C.select({ ariaLabel: "Light palette", get: () => t.lightPreset, set: put((x, v) => { x.lightPreset = v; }),
+        // Light scenes set their own light background, which no control shows, so
+        // picking a palette clears it.
+        row({ label: "Light palette", control: C.select({ ariaLabel: "Light palette", get: () => t.lightPreset, set: put((x, v) => { x.lightPreset = v; x.lightBg = ""; }),
           options: Object.entries(BC.LIGHT_PRESETS).map(([k, v]) => ({ value: k, label: v.label })) }) }),
       ]),
       sec("Typography", [
         row({ label: "Font", hint: "A CSS font stack. Empty keeps Canvas's font.",
-          control: C.text({ ariaLabel: "Font family", placeholder: "Canvas default", get: () => t.font, set: put((x, v) => { x.font = v; }) }) }),
+          control: C.text({ ariaLabel: "Font family", placeholder: "Canvas default", get: () => t.font, set: put((x, v) => { x.font = v; }),
+            validate: (v) => !v.trim() || BC.tokens.safeFontStack(v) ? true : "Use font names separated by commas, and close any quotes." }) }),
         row({ label: "Text size", control: C.segmented({ ariaLabel: "Text size", get: () => t.fontSizeScale, set: put((x, v) => { x.fontSizeScale = v; }),
           options: [{ value: "xs", label: "XS" }, { value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }, { value: "xl", label: "XL" }] }) }),
         row({ label: "Line height", control: C.slider({ ariaLabel: "Line height", min: 1.1, max: 2, step: 0.05, format: (v) => Number(v).toFixed(2),
@@ -382,8 +401,6 @@
           get: () => t.radius, set: put((x, v) => { x.radius = v; }) }) }),
         row({ label: "Rounded corners", hint: "Off squares every corner, Canvas's and ours.",
           control: C.switch({ ariaLabel: "Rounded corners", get: () => t.roundedUI, set: put((x, v) => { x.roundedUI = v; }) }) }),
-        row({ label: "Sidebar width", hint: "Width of Canvas's left navigation. 0 keeps the default.",
-          control: C.number({ ariaLabel: "Sidebar width", min: 0, max: 400, suffix: "px", get: () => t.sidebarWidth, set: put((x, v) => { x.sidebarWidth = Math.max(0, v | 0); }) }) }),
       ]),
       sec("Visibility", [
         row({ label: "Focus ring", hint: "The outline on the link or button you reach with the Tab key.", stacked: true,
@@ -440,11 +457,16 @@
     const cur = store.get();
     const theming = JSON.parse(JSON.stringify(cur.theming));
     delete theming.rotation; // rotation config isn't part of a theme's look
+    // Neither are these. A saved look that carried them would undo them later.
+    for (const key of BC.THEME_KEEPS) delete theming[key];
     const images = BC.themeImages(cur.dashboard.themeImages);
     for (const course of Object.values(cur.dashboard.courses || {})) {
       if (course && course.bgImage && !images.some((i) => i.url === course.bgImage)) images.push({ url: course.bgImage });
     }
-    return { id: BC.util.uuid(), name, settings: { theming, cosmetics: JSON.parse(JSON.stringify(cur.cosmetics)),
+    const cosmetics = JSON.parse(JSON.stringify(cur.cosmetics));
+    // An empty one would erase CSS written after the look was saved.
+    if (!cosmetics.customCss) delete cosmetics.customCss;
+    return { id: BC.util.uuid(), name, settings: { theming, cosmetics,
       dashboard: { themeImages: BC.themeImages(images) } } };
   }
 
@@ -543,7 +565,11 @@
       more.classList.add("bcs-theme__more");
       more.addEventListener("click", () => BC.ui.menu(more, [
         { label: "Export file", icon: "download", onClick: () => downloadTheme(p) },
-        { label: "Delete", icon: "trash", danger: true, onClick: () => store.set((x) => { x.customThemes = (x.customThemes || []).filter((q) => q.id !== p.id); }) },
+        { label: "Delete", icon: "trash", danger: true, onClick: () => store.set((x) => {
+          x.customThemes = (x.customThemes || []).filter((q) => q.id !== p.id);
+          const rotation = x.theming.rotation;
+          if (Array.isArray(rotation?.themeIds)) rotation.themeIds = rotation.themeIds.filter((id) => id !== p.id);
+        }) },
       ]));
       card.appendChild(more);
     }
@@ -694,7 +720,7 @@
       f.text().then(async (txt) => {
         try {
           const j = JSON.parse(txt);
-          const settings = j && typeof j === "object" ? themeOnly(j.settings) : null;
+          const settings = j && typeof j === "object" ? BC.cleanSavedLook(themeOnly(j.settings)) : null;
           if (!settings) throw new Error("this file has no theme in it");
           const saved = { id: BC.util.uuid(), name: String(j.name || "Imported theme").slice(0, 80), settings };
           store.set((x) => { x.customThemes = (x.customThemes || []).concat([saved]); });
@@ -854,7 +880,7 @@
         sw("Hide finished courses", "autoHideConcluded", "Courses Canvas marks as concluded."),
       ]),
       sec("Cards", [
-        row({ label: "Layout", enabledWhen: on, control: C.segmented({ ariaLabel: "Card layout", get: () => d.layout, set: put((x, v) => { x.layout = v; }),
+        row({ label: "Layout", hint: "Masonry fills columns in Canvas's own card order, so your custom order doesn't apply there.", enabledWhen: on, control: C.segmented({ ariaLabel: "Card layout", get: () => d.layout, set: put((x, v) => { x.layout = v; }),
           options: [{ value: "grid", label: "Grid", icon: "grid" }, { value: "list", label: "List", icon: "list" }, { value: "masonry", label: "Masonry", icon: "columns" }, { value: "compact", label: "Compact", icon: "minus" }] }) }),
         row({ label: "Card size", enabledWhen: on, showWhen: (s) => s.dashboard.layout === "grid" || s.dashboard.layout === "masonry",
           control: C.segmented({ ariaLabel: "Card size", get: () => d.cardSize, set: put((x, v) => { x.cardSize = v; }),
@@ -940,8 +966,9 @@
       bgRow,
     ]);
     // "Show all" / "Reset colors" / "Reset names" change every course at once;
-    // the binding keeps each row in step.
-    S().bindings.add(wrap, () => {
+    // the binding keeps each row in step. Rows arrive after the tab's first sync,
+    // so paint once now too.
+    const paint = () => {
       const spec = (store.get().dashboard.courses || {})[c.id] || {};
       if (!focused(name) && name.value !== (spec.nickname || "")) name.value = spec.nickname || "";
       if (picker.value !== colorOf(spec)) picker.value = colorOf(spec);
@@ -953,7 +980,9 @@
       hide.title = hidden ? "Hidden — click to show" : "Shown — click to hide";
       wrap.classList.toggle("bcs-course--hidden", hidden);
       if (!focused(bg) && bg.value !== (spec.bgImage || "")) bg.value = spec.bgImage || "";
-    });
+    };
+    paint();
+    S().bindings.add(wrap, paint);
     return wrap;
   }
 
@@ -1694,16 +1723,10 @@
         if (!carry) { BC.toast && BC.toast.error("That isn't a settings file"); return; }
         const adapter = store.adapter || {};
         // Data an old backup kept inside settings, lifted out by the migrations.
-        const lifted = Object.assign({}, carry.local || {});
-        const hasLifted = Object.keys(lifted).length > 0 || !!carry.gradeHistory;
+        const hasLifted = Object.keys(carry.local || {}).length > 0 || !!carry.gradeHistory;
         try { await store.flush(); } catch (error) { BC.toast && BC.toast.error("Settings could not be imported: " + error.message); return; }
         if (!adapter.saveLocal || (!localPart && !hasLifted)) { BC.toast && BC.toast.success("Settings imported"); return; }
-        const restore = (base) => {
-          const out = Object.assign({}, base || {});
-          for (const k of Object.keys(lifted)) if (out[k] === undefined) out[k] = lifted[k];
-          if (carry.gradeHistory) out.gradeHistory = Object.assign({}, carry.gradeHistory, out.gradeHistory || {});
-          return out;
-        };
+        const restore = (base) => BC.SettingsUI.withCarry(base, carry);
         // A backup with local data replaces it. Legacy settings-only carry-over
         // merges with fresh data inside the storage transaction.
         Promise.resolve(localPart ? adapter.saveLocal(restore(localPart)) : adapter.updateLocal(restore))

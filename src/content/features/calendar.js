@@ -41,6 +41,13 @@
       const start = new Date(); start.setDate(start.getDate() - 14);
       const end = new Date(); end.setDate(end.getDate() + 90);
       const items = await BC.api.plannerItems(start.toISOString(), end.toISOString());
+      // Canvas stores an all-day event as midnight where its creator is, so this
+      // browser's clock can put it on the day before. The event's all_day_date
+      // can't, but only the calendar events API sends it.
+      const isAllDay = (it) => it.plannable_type === "calendar_event" && it.plannable && it.plannable.all_day;
+      const allDayDates = new Map(await Promise.all(items.filter(isAllDay).map((it) =>
+        BC.api.getJSON("/api/v1/calendar_events/" + encodeURIComponent(it.plannable_id || it.plannable.id))
+          .then((ev) => [it, ev && /^\d{4}-\d{2}-\d{2}$/.test(ev.all_day_date) ? ev.all_day_date : null], () => [it, null]))));
       // Personal events were advertised but nothing ever wrote them and there was no
       // UI, so the setting is gone. bcLocal.calendarEvents is left as the read path
       // in case the feature is built later; today it's simply empty.
@@ -54,12 +61,18 @@
         const uid = "bc-" + (it.plannable_type || "item") + "-" + (it.plannable_id || pl.id || Math.random()) + "@" + location.host;
         // Calendar events keep their real span, and all-day events stay all-day.
         // Due work is a 30-minute block from the due time.
-        const allDay = it.plannable_type === "calendar_event" && pl.all_day;
+        const allDay = isAllDay(it);
         const ymd = (d) => BC.dt.ymd(new Date(d)).replace(/-/g, "");   // the local calendar day
         // The end date is exclusive: the next calendar day, by date rather than by
         // adding 24 hours, which lands on the same day when clocks go back.
         const dayAfter = (d) => { const x = new Date(d); x.setDate(x.getDate() + 1); return x; };
-        const span = allDay ? ["DTSTART;VALUE=DATE:" + ymd(pl.start_at || due), "DTEND;VALUE=DATE:" + ymd(dayAfter(pl.end_at || pl.start_at || due))]
+        const day = allDayDates.get(it);
+        const dayStart = day && new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
+        // A multi-day event keeps its length: whole days from start to end, both midnights.
+        const lastDay = dayStart && new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() +
+          Math.max(0, Math.round((new Date(pl.end_at || pl.start_at || due) - new Date(pl.start_at || due)) / 864e5)));
+        const span = allDay && dayStart ? ["DTSTART;VALUE=DATE:" + ymd(dayStart), "DTEND;VALUE=DATE:" + ymd(dayAfter(lastDay))]
+          : allDay ? ["DTSTART;VALUE=DATE:" + ymd(pl.start_at || due), "DTEND;VALUE=DATE:" + ymd(dayAfter(pl.end_at || pl.start_at || due))]
           : ["DTSTART:" + icsDate(pl.start_at || due), "DTEND:" + icsDate(pl.end_at || new Date(new Date(due).getTime() + 30 * 60 * 1000))];
         const url = it.html_url ? new URL(it.html_url, location.origin).href : "";
         lines.push("BEGIN:VEVENT",

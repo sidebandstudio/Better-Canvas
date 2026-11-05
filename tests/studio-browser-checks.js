@@ -99,6 +99,9 @@
   }
   root.querySelector('[aria-label="Progress shape"] [data-value="heart"]').click();
   root.querySelector('[aria-label="Due-date format"] [data-value="absolute"]').click();
+  await BC.storage.update((s) => { s.dashboard.layout = "masonry"; s.dashboard.courses["100"] = { ...(s.dashboard.courses["100"] || {}), hidden: true }; }); BC.applyNow();
+  check(getComputedStyle(document.querySelector(".ic-DashboardCard")).display === "none" && getComputedStyle(document.querySelectorAll(".ic-DashboardCard")[1]).display === "block", "A hidden course stays hidden in the masonry layout");
+  await BC.storage.update((s) => { s.dashboard.layout = "grid"; s.dashboard.courses["100"].hidden = false; }); BC.applyNow();
   BC.features.settingsPanel.close();
   check(!document.body.inert, "Closing the editor restores Canvas interaction");
   BC.api.plannerItems = async () => [{ plannable_type: "assignment", plannable_date: new Date(Date.now() + 86400000).toISOString(), plannable: { id: 81, title: "Sample essay", points_possible: 10 }, course_id: 100, html_url: "/courses/100/assignments/81", planner_override: { marked_complete: false } }];

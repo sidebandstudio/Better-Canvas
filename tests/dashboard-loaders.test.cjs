@@ -58,3 +58,47 @@ test("invalidating an in-flight planner read prevents it from repopulating stale
     assert.equal(cache.peek("planner"), "new");
   } finally { dom.window.close(); }
 });
+
+test("card due counts and progress leave out lectures and announcements", async () => {
+  const card = '<div class="ic-DashboardCard"><a class="ic-DashboardCard__link" href="/courses/5"></a><div class="ic-DashboardCard__header"></div></div>';
+  const { dom, context } = domContext('<div id="DashboardCard_Container">' + card + "</div>");
+  try {
+    load(context, "src/shared/defaults.js", "src/shared/themes.js", "src/shared/theme-library.js", "src/shared/theme-scenes.js",
+      "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/lifecycle.js", "src/content/core/injector.js");
+    const BC = context.BC, H = 3600000, now = Date.now(), at = (ms) => new Date(now + ms).toISOString();
+    BC.diag = { push() {} };
+    BC.requestApply = () => {};
+    const items = [
+      { course_id: "5", plannable_type: "assignment", plannable_date: at(-48 * H), submissions: { submitted: true } },
+      { course_id: "5", plannable_type: "announcement", plannable_date: at(-24 * H) },
+      { course_id: "5", plannable_type: "calendar_event", plannable_date: at(-30 * H) },
+      { course_id: "5", plannable_type: "calendar_event", plannable_date: at(3 * H) },
+    ];
+    BC.api = { TTL: { courses: 60000, planner: 30000 }, coursesWithScores: async () => [], plannerItems: async () => items,
+      plannerItemDone: (it) => !!(it.submissions && it.submissions.submitted) };
+    load(context, "src/content/features/dashboard.js");
+    const settings = BC.cloneDefaults();
+    Object.assign(settings.dashboard, { autoHideConcluded: false, courseSearch: false, widgets: {}, showProgressBar: true, showBadges: true });
+    const apply = () => BC.features.dashboard.apply(settings, { page: "dashboard" });
+    apply(); await settle(); await settle(); apply();
+    const doc = dom.window.document;
+    assert.equal(doc.querySelector(".bc-badge"), null);
+    assert.equal(doc.querySelector(".bc-progress").getAttribute("aria-valuenow"), "100");
+  } finally { dom.window.close(); }
+});
+
+test("modules too big for Canvas to inline fetch their items separately", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const BC = context.BC, paths = [];
+    BC.api.getList = async (path) => {
+      paths.push(path);
+      if (path.includes("/items")) return [{ id: 9, completion_requirement: { completed: true } }];
+      return [{ id: 1, items: [] }, { id: 2, items_count: 150 }];
+    };
+    const mods = await BC.api.courseModules(7);
+    assert.equal(mods[1].items.length, 1);
+    assert.deepEqual(paths.slice(1), ["/api/v1/courses/7/modules/2/items?per_page=100"]);
+  } finally { dom.window.close(); }
+});

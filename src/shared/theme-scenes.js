@@ -203,8 +203,10 @@
       get() { return images || (images = Array.from({ length: 48 }, (_, i) => BC.sceneArt(s.id, i))); } });
     theme.id = "scene-" + s.id;
     theme.description = s.description;
+    // The base colour belongs to the scene's own mode. Set for both, switching
+    // modes put dark text on a dark page next to white panels.
     Object.assign(theme.settings.theming, {
-      experience: s.id, darkBg: s.colors[0], lightBg: s.colors[0], accentColor: s.accent,
+      experience: s.id, [s.dark ? "darkBg" : "lightBg"]: s.colors[0], accentColor: s.accent,
       radius: ["blueprint", "gallery", "mono"].includes(s.id) ? 6 : 20,
       font: 'system-ui, -apple-system, "Segoe UI", sans-serif',
     });

@@ -109,4 +109,108 @@ test("failed grade history writes can retry on the next score observation", asyn
   assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 90);
   await BC.grades.recordScore("7", 91);
   assert.equal(db.data.bcLocal.gradeHistory[7].length, 1);
+  assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 91, "a later grade the same day replaces the morning's");
+  await BC.grades.recordScore("7", 90);
+  assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 90, "a score seen earlier today can be the latest again");
+});
+
+test("a tab repeating its cached score doesn't replace a newer grade another tab recorded", async () => {
+  const db = require("./storage-harness.cjs").database();
+  async function tab() {
+    const t = db.tab(); await t.storage.load();
+    load(t.context, "src/content/core/datetime.js");
+    t.context.BC.registry = { register() {} }; t.context.BC.util.warn = () => {};
+    load(t.context, "src/content/features/grades.js");
+    return t;
+  }
+  const a = await tab(), b = await tab();
+  await a.context.BC.grades.recordScore("7", 90);
+  await b.context.BC.grades.recordScore("7", 95);
+  a.deliver(db.events.at(-1)); await settle();
+  assert.equal(a.context.BC.storage.local.gradeHistory[7][0].score, 95, "tab A sees tab B's write");
+  await a.context.BC.grades.recordScore("7", 90);
+  assert.equal(db.data.bcLocal.gradeHistory[7][0].score, 95);
+});
+
+test("the rubric predictor starts from the graded rubric on the assignment's submission", async () => {
+  const { database } = require("./storage-harness.cjs");
+  const { root } = require("./audit-helpers.cjs");
+  const page = domContext('<div id="panel"></div>', { chrome: database().client().chrome });
+  try {
+    load(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/storage.js");
+    const BC = page.context.BC;
+    await BC.storage.load(); BC.registry = { register() {} };
+    require("node:vm").runInContext(require("node:fs").readFileSync(require("node:path").join(root, "src/content/features/grades.js"), "utf8")
+      .replace("  BC.registry.register({", "  BC.testBuildRubric = buildRubricUI;\n  BC.registry.register({"), page.context);
+    const panel = page.dom.window.document.getElementById("panel");
+    const rubric = [{ id: "a", points: 10, description: "Thesis" }, { id: "b", points: 10, description: "Evidence" }];
+    BC.testBuildRubric(panel, { id: 2, submission: { rubric_assessment: { a: { points: 6 }, b: { points: 5 } } } }, rubric, null, 7);
+    assert.deepEqual([...panel.querySelectorAll("input")].map((i) => i.value), ["6", "5"]);
+  } finally { page.dom.window.close(); }
+});
+
+test("course scores ignore the zero final score before anything is graded", () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const score = (enrollment, course = {}) => context.BC.api.courseScore({ ...course, enrollments: [enrollment] });
+    assert.equal(score({ computed_current_score: null, computed_final_score: 0 }), null);
+    assert.equal(score({ computed_current_score: 91.5, computed_final_score: 40 }), 91.5);
+    assert.equal(score({ computed_current_score: null, computed_final_score: 77 }, { concluded: true }), 77);
+    assert.equal(score({ computed_current_score: null, computed_final_score: 77, enrollment_state: "completed" }), 77);
+    assert.equal(context.BC.api.courseScore({}), null);
+  } finally { dom.window.close(); }
+});
+
+test("the rubric predictor leaves out criteria that don't count toward the score", async () => {
+  const { dom, context } = domContext('<div id="right-side"></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/ui.js", "src/content/core/lifecycle.js");
+    const BC = context.BC, nodes = new Map();
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
+    BC.registry = { register(feature) { BC.feature = feature; } };
+    BC.api = { assignmentGroups: async () => [], assignment: async () => ({ id: 2, points_possible: 10,
+      rubric: [{ id: "a", points: 10, description: "Scored" }, { id: "b", points: 5, description: "Feedback only", ignore_for_scoring: true }] }) };
+    BC.storage = { local: {}, updateLocal: async () => {}, update: async () => {} };
+    load(context, "src/content/features/grades.js");
+    BC.feature.apply(BC.cloneDefaults(), { page: "assignment", courseId: "7", path: "/courses/7/assignments/2" });
+    await settle();
+    assert.equal(dom.window.document.querySelectorAll(".bc-rubric-crit").length, 1);
+    assert.match(dom.window.document.querySelector("[data-total]").textContent, /10 \/ 10 \(100\.0%\)/);
+  } finally { dom.window.close(); }
+});
+
+test("planner items count as done the way Canvas's planner counts them", () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const done = (it) => context.BC.api.plannerItemDone(it);
+    assert.equal(done({ plannable_type: "assessment_request", plannable: { workflow_state: "completed" }, submissions: false }), true);
+    assert.equal(done({ plannable_type: "assessment_request", plannable: { workflow_state: "assigned" }, submissions: false }), false);
+    assert.equal(done({ plannable_type: "assignment", submissions: { submitted: true, redo_request: true } }), false);
+    assert.equal(done({ plannable_type: "assignment", submissions: { submitted: true } }), true);
+    assert.equal(done({ plannable_type: "assignment", submissions: { submitted: true, redo_request: true }, planner_override: { marked_complete: true } }), true);
+  } finally { dom.window.close(); }
+});
+
+test("grade tools read a past course's weighting setting", async () => {
+  const { dom, context } = domContext('<div id="main"><div id="grades_summary"></div></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/api.js");
+    const BC = context.BC, nodes = new Map();
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
+    BC.registry = { register(feature) { BC.feature = feature; } };
+    BC.storage = { local: {}, updateLocal: async () => {}, update: async () => {} };
+    const groups = [
+      { group_weight: 90, assignments: [{ id: 1, points_possible: 10, submission: { score: 0 } }] },
+      { group_weight: 10, assignments: [{ id: 2, points_possible: 10, submission: { score: 10 } }] },
+    ];
+    BC.api.getList = async (url) => url.includes("assignment_groups") ? groups : [];
+    BC.api.getJSON = async () => ({ id: 7, apply_assignment_group_weights: false });
+    load(context, "src/content/features/grades.js");
+    const settings = BC.cloneDefaults(); settings.grades.autoRefresh = false;
+    BC.feature.apply(settings, { page: "grades", courseId: "7", path: "/courses/7/grades" });
+    for (let i = 0; i < 5; i++) await settle();
+    assert.equal(dom.window.document.querySelector(".bc-gt-total").textContent, "50.00%", "weighting off still holds after the course ends");
+  } finally { dom.window.close(); }
 });

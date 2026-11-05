@@ -721,7 +721,9 @@
           "aria-checked": it.checked != null ? (it.checked ? "true" : "false") : null,
         }, [it.dot && /^#[0-9a-f]{6}$/i.test(it.dot) ? el("span", { class: "bc-menu__dot", style: "background:" + it.dot }) : it.icon ? icon(it.icon) : null,
             el("span", { class: "bc-truncate", text: it.label })]);
-        b.addEventListener("click", () => { closePop(); if (it.onClick) BC.util.guard(it.onClick, "menu item"); });
+        // Focus goes back to the menu button first, so a dialog the item opens
+        // returns there instead of to a menu item that's about to go.
+        b.addEventListener("click", () => { closePop(); BC.util.guard(() => anchor.focus({ preventScroll: true }), "menu focus"); if (it.onClick) BC.util.guard(it.onClick, "menu item"); });
         list.appendChild(b);
       }
       list.addEventListener("keydown", (e) => {
@@ -880,8 +882,10 @@
       const activeIn = () => container.activeElement || document.activeElement;
       const tabbables = () => Array.from(container.querySelectorAll(SEL))
         .filter((e) => !e.hasAttribute("inert") && e.getClientRects().length > 0);
-      const previous = returnTo ||
+      let previous = returnTo ||
         (document.activeElement && document.activeElement !== document.body ? document.activeElement : null);
+      // An opener inside a shadow root shows up as its host, which can't take focus.
+      while (previous && previous.shadowRoot && previous.shadowRoot.activeElement) previous = previous.shadowRoot.activeElement;
 
       function onKey(e) {
         if (e.key !== "Tab") return;

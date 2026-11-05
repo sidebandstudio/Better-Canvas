@@ -31,6 +31,7 @@ test("reset restores options but keeps what the user made", () => {
     s.navigation.global.customLinks.push({ id: "l1", label: "Mail", url: "https://mail.example.edu" });
     s.dashboard.courses[7] = { nickname: "Bio", hidden: true, color: "#ff0000", bgImage: "https://example.com/a.jpg" };
     s.onboarding.seen = true;
+    s.files.starred = ["101"];
   });
   store.reset();
   const s = copy(store.get());
@@ -44,6 +45,7 @@ test("reset restores options but keeps what the user made", () => {
   assert.equal(s.navigation.global.customLinks[0].label, "Mail");
   assert.deepEqual(s.dashboard.courses[7], { nickname: "Bio", hidden: true });
   assert.equal(s.onboarding.seen, true);
+  assert.deepEqual(s.files.starred, ["101"]);
   assert.equal(store.undo(), true);
   assert.equal(store.get().dashboard.courses[7].color, "#ff0000");
 });
@@ -59,6 +61,17 @@ test("settings import recognizes backups and turns away theme files and old lock
   assert.equal(kind({ id: "x", name: "Mine", settings: { theming: {}, cosmetics: {} } }), "theme");
   assert.equal(kind({ hello: "world" }), null);
   assert.equal(kind([]), null);
+});
+
+test("an old settings file's planner stars and steps land next to this device's planner data", () => {
+  const context = vm.createContext({ console, setTimeout, clearTimeout, structuredClone, navigator: { platform: "Win32" } });
+  load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/shared/settings/index.js");
+  const BC = context.BC, carry = {};
+  BC.mergeDefaults({ version: 3, todo: { local: { stars: { a: true, b: true }, subtasks: { a: [{ text: "Outline" }] } } } }, carry);
+  const out = BC.SettingsUI.withCarry({ todo: { stars: { b: false, c: true } }, notes: { x: 1 } }, carry);
+  assert.deepEqual(JSON.parse(JSON.stringify(out.todo.stars)), { b: false, c: true, a: true }, "this device's entries win");
+  assert.equal(out.todo.subtasks.a[0].text, "Outline");
+  assert.deepEqual(JSON.parse(JSON.stringify(out.notes)), { x: 1 });
 });
 
 test("shortcut recorder lets Tab move focus, clears on Backspace and ignores bare Enter", () => {
@@ -87,6 +100,24 @@ test("shortcut recorder lets Tab move focus, clears on Backspace and ignores bar
     btn.click();
     press({ key: "j", code: "KeyJ", ctrlKey: true });
     assert.deepEqual(writes, ["", "Mod+J"]);
+  } finally { dom.window.close(); }
+});
+
+test("shortcuts stop firing once Better Canvas is switched off", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext("<body></body>");
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/shortcuts.js");
+    const BC = context.BC, settings = BC.cloneDefaults();
+    BC.storage = { current: settings };
+    BC.shortcuts._install();
+    let fired = 0;
+    BC.shortcuts.register("palette", "Mod+K", () => fired++);
+    const press = () => dom.window.document.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, bubbles: true, cancelable: true }));
+    press(); assert.equal(fired, 1);
+    settings.enabled = false;
+    assert.equal(press(), true, "the browser's own Ctrl+K is left alone");
+    assert.equal(fired, 1);
   } finally { dom.window.close(); }
 });
 
@@ -162,17 +193,94 @@ test("two tabs finishing the same focus phase start the break once", async () =>
   } finally { a.page.dom.window.close(); b.page.dom.window.close(); }
 });
 
-async function plannerContext() {
+test("starting focus after a stop begins a new set instead of an early long break", async () => {
+  const { database } = require("./storage-harness.cjs");
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const db = database({ bcLocal: { pomodoro: { phase: null, cycle: 3, sessions: [], taskTitle: "" } } });
+  const page = domContext("", { chrome: db.client().chrome });
+  loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/color.js", "src/content/core/icons.js", "src/content/core/injector.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
+  const BC = page.context.BC;
+  try {
+    await BC.storage.load(); await BC.storage.loadLocal();
+    BC.toast = { success() {}, error() {}, info() {} };
+    vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8")
+      .replace("  BC.registry.register({", "  BC.testStart = startPomodoro;\n  BC.registry.register({"), page.context);
+    BC.testStart(BC.storage.current, "Essay");
+    await BC.storage.updateLocal(() => {});
+    assert.equal(db.data.bcLocal.pomodoro.phase, "work");
+    assert.equal(db.data.bcLocal.pomodoro.cycle, 0);
+  } finally { page.dom.window.close(); }
+});
+
+test("the planner keeps its loading state until its first fetch, even when course cards arrive first", async () => {
+  const { database } = require("./storage-harness.cjs");
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const db = database(), page = domContext('<div id="right-side"><div class="Sidebar__TodoListContainer"></div></div>', { chrome: db.client().chrome });
+  loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/color.js", "src/content/core/icons.js", "src/content/core/injector.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
+  const BC = page.context.BC;
+  try {
+    await BC.storage.load();
+    BC.storage.current.todo.mode = "custom";
+    let feature, release;
+    BC.registry = { register(def) { feature = def; } };
+    BC.toast = { success() {}, error() {}, info() {} };
+    BC.api = { TTL: { planner: 30000 }, plannerItemDone: () => false,
+      dashboardCards: async () => [{ id: "9", shortName: "Bio", courseCode: "BIO1", color: "#336699" }],
+      plannerItems: () => new Promise((resolve) => { release = () => resolve([{ plannable_type: "assignment", plannable_id: 1,
+        plannable: { id: 1, title: "Lab report" }, plannable_date: new Date(Date.now() + 5 * 3600e3).toISOString(), course_id: "9" }]); }) };
+    vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8"), page.context);
+    feature.apply(BC.storage.current, { page: "dashboard" });
+    for (let i = 0; i < 6; i++) await settle();
+    const root_ = page.dom.window.document.querySelector('[data-bc-node="bc-todo-widget"]').shadowRoot;
+    assert.equal(root_.querySelector(".pl-empty__title"), null);
+    release();
+    for (let i = 0; i < 6; i++) await settle();
+    assert.equal(root_.querySelector(".pl-item__title").textContent, "Lab report");
+  } finally { page.dom.window.close(); }
+});
+
+async function plannerContext(now) {
   const { database } = require("./storage-harness.cjs");
   const { domContext, load: loadDom } = require("./audit-helpers.cjs");
   const db = database({ bcLocal: {} }), client = db.client(), page = domContext("", { chrome: client.chrome });
+  if (now) vm.runInContext(`(() => { const R = Date, fixed = ${new Date(now).getTime()};
+    class D extends R { constructor(...a) { if (a.length) super(...a); else super(fixed); } static now() { return fixed; } }
+    globalThis.Date = D; })()`, page.context);
   loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/color.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/storage.js");
   const BC = page.context.BC;
   await BC.storage.load(); await BC.storage.loadLocal();
   vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8")
-    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus };\n  BC.registry.register({"), page.context);
+    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus, defaultStart, rangeDays, fetchWindow, buildModel };\n  BC.registry.register({"), page.context);
   return { BC, page };
 }
+
+test("a planner window shorter than a week still holds today", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T15:00:00"); // a Friday
+  try {
+    for (const startOn of ["monday", "sunday"]) {
+      const t = { ...BC.storage.current.todo, startOn, rangeDays: 3, view: "list" };
+      const start = BC.test.defaultStart(t), end = BC.dt.addDays(start, BC.test.rangeDays(t)), today = new Date(2026, 10, 6);
+      assert.ok(start <= today && end > today, startOn + " " + BC.dt.ymd(start));
+    }
+    const week = { ...BC.storage.current.todo, startOn: "monday", rangeDays: 7, view: "list" };
+    assert.equal(BC.dt.ymd(BC.test.defaultStart(week)), "2026-11-02");
+  } finally { page.dom.window.close(); }
+});
+
+test("past lectures and announcements are not overdue work", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItemDone: (it) => !!(it.submissions && it.submissions.submitted),
+      plannerItems: async () => [
+        { plannable_type: "calendar_event", plannable_id: 5, plannable: { id: 5, title: "Lecture" }, plannable_date: new Date(2026, 10, 3, 9).toISOString(), course_id: "9" },
+        { plannable_type: "announcement", plannable_id: 6, plannable: { id: 6, title: "Room change" }, plannable_date: new Date(2026, 10, 3, 13).toISOString(), course_id: "9" },
+        { plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 3, 23, 59).toISOString(), course_id: "9" },
+      ] };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    assert.deepEqual(copy(BC.test.buildModel(s).overdue.map((it) => it.plannable.title)), ["HW 6"]);
+  } finally { page.dom.window.close(); }
+});
 
 test("recurring tasks clamp to short months and start on the day they were made", async () => {
   const { BC, page } = await plannerContext();
@@ -219,7 +327,10 @@ test("calendar export keeps event spans, skips announcements and gives each type
       { plannable_type: "discussion_topic", plannable_id: 5, plannable_date: "2027-03-02T15:00:00Z", plannable: { title: "Forum" } },
       { plannable_type: "announcement", plannable_id: 9, plannable_date: "2027-03-01T12:00:00Z", plannable: { title: "News" } },
       { plannable_type: "calendar_event", plannable_id: 7, plannable_date: "2027-03-03T14:00:00Z", plannable: { title: "Lab", start_at: "2027-03-03T14:00:00Z", end_at: "2027-03-03T16:00:00Z" } },
-    ] };
+      // Made in Tokyo: midnight there on March 4 is still March 3 for most of the world.
+      { plannable_type: "calendar_event", plannable_id: 8, plannable_date: "2027-03-03T15:00:00Z", plannable: { title: "No class", all_day: true, start_at: "2027-03-03T15:00:00Z", end_at: "2027-03-03T15:00:00Z" } },
+      { plannable_type: "calendar_event", plannable_id: 11, plannable_date: "2027-03-09T15:00:00Z", plannable: { title: "Break", all_day: true, start_at: "2027-03-09T15:00:00Z", end_at: "2027-03-11T15:00:00Z" } },
+    ], getJSON: async (url) => ({ all_day_date: { "/api/v1/calendar_events/8": "2027-03-04", "/api/v1/calendar_events/11": "2027-03-10" }[url] }) };
     let blob;
     dom.window.URL.createObjectURL = (b) => { blob = b; return "blob:test"; };
     dom.window.URL.revokeObjectURL = () => {};
@@ -231,6 +342,8 @@ test("calendar export keeps event spans, skips announcements and gives each type
     assert.match(ics, /UID:bc-assignment-5@bc-test\.instructure\.com/);
     assert.match(ics, /UID:bc-discussion_topic-5@bc-test\.instructure\.com/);
     assert.match(ics, /DTSTART:20270303T140000Z\r\nDTEND:20270303T160000Z/);
+    assert.match(ics, /DTSTART;VALUE=DATE:20270304\r\nDTEND;VALUE=DATE:20270305/);
+    assert.match(ics, /DTSTART;VALUE=DATE:20270310\r\nDTEND;VALUE=DATE:20270313/, "three days stay three days");
     assert.match(ics, /URL:http:\/\/bc-test\.instructure\.com\/courses\/1\/assignments\/5/);
   } finally { dom.window.close(); }
 });
@@ -262,8 +375,9 @@ test("grade tools show Canvas's current score and keep the final-exam inputs thr
     BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
     BC.registry = { register(feature) { BC.feature = feature; } };
     // Our own estimate would be 50%. Canvas says 88.
-    BC.api = { assignmentGroups: async () => [{ assignments: [{ id: 1, points_possible: 10, submission: { score: 5 } }] }],
-      coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 88 }] }] };
+    loadDom(context, "src/content/core/api.js");
+    Object.assign(BC.api, { assignmentGroups: async () => [{ assignments: [{ id: 1, points_possible: 10, submission: { score: 5 } }] }],
+      coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 88 }] }] });
     BC.storage = { local: {}, updateLocal: async () => {}, update: async () => {} };
     loadDom(context, "src/content/features/grades.js");
     const settings = BC.cloneDefaults(); settings.grades.autoRefresh = false;
@@ -278,6 +392,27 @@ test("grade tools show Canvas's current score and keep the final-exam inputs thr
     BC.feature.apply(settings, ctx); await settle(); await settle();
     assert.equal(doc.querySelector("[data-target]").value, "99");
     assert.equal(doc.querySelector("[data-weight]").value, "10");
+  } finally { dom.window.close(); }
+});
+
+test("the grade trend ends at today's current grade, not an earlier score from today", async () => {
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="main"><div id="grades_summary"></div></div>');
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/ui.js", "src/content/core/lifecycle.js");
+    const BC = context.BC, nodes = new Map();
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(id, host, factory) { if (!nodes.has(id)) nodes.set(id, factory()); return nodes.get(id); } };
+    BC.registry = { register(feature) { BC.feature = feature; } };
+    loadDom(context, "src/content/core/api.js");
+    Object.assign(BC.api, { assignmentGroups: async () => [{ assignments: [] }], coursesWithScores: async () => [{ id: 7, enrollments: [{ computed_current_score: 95 }] }] });
+    const today = BC.dt.ymd(new Date()), yesterday = BC.dt.ymd(BC.dt.addDays(new Date(), -1));
+    BC.storage = { local: { gradeHistory: { 7: [{ date: yesterday, score: 80 }, { date: today, score: 90 }] } }, updateLocal: async () => {}, update: async () => {} };
+    loadDom(context, "src/content/features/grades.js");
+    const settings = BC.cloneDefaults(); settings.grades.autoRefresh = false;
+    BC.feature.apply(settings, { page: "grades", courseId: "7", path: "/courses/7/grades" }); await settle(); await settle();
+    const meta = dom.window.document.querySelector(".bc-gt-trend-meta").textContent;
+    assert.match(meta, /max 95\.0%/);
+    assert.match(meta, /\+15\.0%/);
   } finally { dom.window.close(); }
 });
 
@@ -462,6 +597,30 @@ test("leaving a Canvas page always asks the worker to check the toolbar count", 
   } finally { page.dom.window.close(); }
 });
 
+test("an old 0% baseline for an ungraded course is dropped, so the first real grade isn't a change", async () => {
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const page = domContext("", { chrome: { runtime: { id: "t", sendMessage: (msg, cb) => { cb && cb(); } } } });
+  try {
+    loadDom(page.context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/lifecycle.js", "src/content/core/api.js");
+    const BC = page.context.BC, never = () => new Promise(() => {}), alarms = {}, toasts = [];
+    let data = { scoreSeen: { 7: 0 } }, score = null;
+    const settings = BC.cloneDefaults();
+    Object.assign(settings.notifications, { inPage: true, types: { newGrade: true } });
+    Object.assign(BC, { alarms: { every(id, _ms, fn) { alarms[id] = fn; }, clear() {} }, toast: { info: (m) => toasts.push(m) },
+      storage: { current: settings, local: data, updateLocal: async (fn) => { data = JSON.parse(JSON.stringify(data)); fn(data); BC.storage.local = data; } } });
+    Object.assign(BC.api, { plannerItems: never, courseAnnouncements: never,
+      coursesWithScores: async () => [{ id: 7, name: "Bio", enrollments: [{ computed_current_score: score, computed_final_score: 0 }] }] });
+    loadDom(page.context, "src/content/features/notifications.js");
+    BC.features.notifications.apply(settings);
+    for (let i = 0; i < 4; i++) await settle();
+    assert.equal(data.scoreSeen[7], undefined);
+    score = 95; alarms["bc-notif-scan"]();
+    for (let i = 0; i < 4; i++) await settle();
+    assert.deepEqual(toasts, []);
+    assert.equal(data.scoreSeen[7], 95);
+  } finally { page.dom.window.close(); }
+});
+
 test("the toolbar count clears once no Canvas tab is left", async () => {
   const listeners = {}, badge = [];
   let open = [{ id: 1 }];
@@ -556,6 +715,21 @@ test("review round 2B: syllabus dates after 'is', paragraphs in cells, and focus
     BC.test.restoreFocus(container, had);
     assert.equal(doc.activeElement.getAttribute("aria-label"), "Done c");
   } finally { page.dom.window.close(); }
+});
+
+test("dark mode reads color(srgb) backgrounds, the form Chrome gives color-mix()", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="content"><div id="mixed" style="background-color: color(srgb 1 1 1 / 0.94)">row</div>' +
+    '<div id="plain" style="background-color: rgb(255, 255, 255)">row</div></div>');
+  try {
+    loadDom(context, "src/content/core/darkengine.js");
+    dom.window.document.documentElement.classList.add("bc-dark");
+    context.BC.darkEngine.start();
+    const tag = (id) => dom.window.document.getElementById(id).getAttribute("data-bc-dbg");
+    assert.notEqual(tag("plain"), null);
+    assert.equal(tag("mixed"), tag("plain"));
+    context.BC.darkEngine.stop();
+  } finally { dom.window.close(); }
 });
 
 test("dark mode pins dark text on mid-tone backgrounds it leaves light", () => {
@@ -677,6 +851,38 @@ test("found on real Canvas: a failed module fetch waits instead of repeating on 
   const settings = { modules: { progressBars: true } }, ctx = { page: "modules", courseId: "142" };
   for (let i = 0; i < 5; i++) { feature.apply(settings, ctx); await new Promise((r) => setImmediate(r)); }
   assert.equal(calls, 1, "page updates after a failure don't refetch");
+});
+
+test("module progress stays off for a teacher, whose modules carry no completion", async () => {
+  const { domContext, load: loadDom, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="content"><div id="context_module_1"><div class="header"></div></div></div>');
+  try {
+    const BC = context.BC = { features: {}, diag: { push() {} }, registry: { register: (f) => { BC.feature = f; } } };
+    BC.injector = { setStyle() {}, removeNode() {}, ensureNode(_id, _host, factory) { return factory(); } };
+    let items = [{ id: 9, completion_requirement: { type: "must_view" } }];
+    BC.api = { courseModules: async () => [{ id: 1, items }] };
+    loadDom(context, "src/content/features/modules.js");
+    BC.feature.apply({ modules: { progressBars: true } }, { page: "modules", courseId: "7" }); await settle();
+    assert.equal(dom.window.document.querySelector(".bc-mod-summary"), null);
+    items = [{ id: 9, completion_requirement: { type: "must_view", completed: false } }];
+    BC.feature.apply({ modules: { progressBars: true } }, { page: "modules", courseId: "7" }); await settle();
+    assert.match(dom.window.document.querySelector(".bc-mod-sum").textContent, /0\/1/);
+  } finally { dom.window.close(); }
+});
+
+test("discussion tools also run on a group's discussion", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div><div id="discussion-redesign-layout"><div data-testid="discussion-entry-container"><div class="user_content">Hello there</div></div></div></div>');
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/lifecycle.js");
+    const BC = context.BC;
+    BC.injector = { setStyle() {}, removeNode() {} }; BC.diag = { push() {} };
+    BC.registry = { register: (f) => { BC.feature = f; } };
+    loadDom(context, "src/content/features/discussions.js");
+    const settings = BC.cloneDefaults(); settings.discussions.wordCount = true;
+    BC.feature.apply(settings, { page: "other", path: "/groups/5/discussion_topics/9", courseId: null });
+    assert.ok(dom.window.document.querySelector('[data-bc-node="bc-disc-bar"]'));
+  } finally { dom.window.close(); }
 });
 
 test("found on real Canvas: text on accent fills uses the accent's contrast colour", () => {

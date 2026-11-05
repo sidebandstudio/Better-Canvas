@@ -26,7 +26,9 @@
     // Periods count LOCAL days: dividing raw epoch ms rotated at UTC midnight, which
     // is mid-afternoon or evening across the Americas.
     const localDay = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / DAY);
-    const idx = r.mode === "weekly" ? Math.floor(localDay / 7) : localDay;
+    // Day 0 was a Thursday. The +3 starts each weekly period on a Monday.
+    const week = Math.floor((localDay + 3) / 7);
+    const idx = r.mode === "weekly" ? week : localDay;
     const period = (r.mode || "daily") + ":" + idx;
     const last = BC.storage.local.lastRotation;
     if (last?.period === period || failedPeriod === period) return;
@@ -48,14 +50,16 @@
       applied = null;
       const rotation = d.theming.rotation;
       if (!rotation.enabled || !rotation.themeIds?.length) return;
-      const index = rotation.mode === "weekly" ? Math.floor(localDay / 7) : localDay;
+      const index = rotation.mode === "weekly" ? week : localDay;
       const id = rotation.themeIds[index % rotation.themeIds.length];
       const theme = (d.customThemes || []).concat(BC.PRESET_THEMES || []).find((t) => t && t.id === id);
       if (!theme?.settings) return;
       BC.applyTheme(d, theme);
       applied = { period: (rotation.mode || "daily") + ":" + index, themeId: id, name: theme.name || id };
     }).then(() => {
-        if (!applied) return;
+        // A deleted saved theme leaves its id behind. Without this the unchanged
+        // commit re-ran applyAll, which landed here again several times a second.
+        if (!applied) { failedPeriod = period; return; }
         return BC.storage.updateLocal((d) => { d.lastRotation = { period: applied.period, themeId: applied.themeId }; })
           .then(() => BC.toast.info("Theme rotated: " + applied.name));
       })

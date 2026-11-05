@@ -142,7 +142,9 @@
     if (d.layout === "masonry") css += `
       ${reset}
       ${CARDS} { display: block !important; columns: ${Math.max(2, Math.floor(1200 / size))} ${size}px !important; column-gap: 14px !important; }
-      ${CARD} { display: block !important; width: 100% !important; margin: 0 0 14px !important; break-inside: avoid !important; }`;
+      ${CARD} { display: block !important; width: 100% !important; margin: 0 0 14px !important; break-inside: avoid !important; }
+      /* Hidden, finished and filtered-out cards are hidden inline. */
+      ${CARD}:is([style*="display: none"], [style*="display:none"]) { display: none !important; }`;
     return css;
   }
 
@@ -444,9 +446,8 @@
     const list = await BC.api.coursesWithScores();
     const scores = new Map();
     for (const c of list) {
-      const enr = (c.enrollments || [])[0] || {};
-      const s = enr.computed_current_score != null ? enr.computed_current_score : enr.computed_final_score;
-      if (s != null) scores.set(String(c.id), Number(s));
+      const s = BC.api.courseScore(c);
+      if (s != null) scores.set(String(c.id), s);
     }
     return scores;
   }
@@ -460,6 +461,8 @@
     for (const it of items) {
       const cid = it.course_id ? String(it.course_id) : (it.context_type === "Course" ? String(it.context_id) : null);
       if (!cid) continue;
+      // Lectures, office hours and announcements aren't work that comes due.
+      if (it.plannable_type === "calendar_event" || it.plannable_type === "announcement") continue;
       const done = BC.api.plannerItemDone(it);
       const dueISO = it.plannable_date || (it.plannable && it.plannable.due_at);
       // The bar is "done in the last month", so work that isn't due yet stays out:

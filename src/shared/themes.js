@@ -153,6 +153,8 @@
     const merge = (to, from) => {
       for (const key of Object.keys(from)) {
         const value = from[key];
+        // Same rule as mergeDefaults.
+        if (to[key] !== undefined && BC.settingShape(to[key]) !== BC.settingShape(value)) continue;
         if (Array.isArray(value)) to[key] = JSON.parse(JSON.stringify(value));
         else if (value && typeof value === "object") {
           if (!to[key] || typeof to[key] !== "object" || Array.isArray(to[key])) to[key] = {};
@@ -166,12 +168,16 @@
     delete baseTheming.rotation;
     const accessibility = {};
     for (const key of BC.THEME_KEEPS) {
-      if (!src.theming || !(key in src.theming)) accessibility[key] = target.theming[key];
+      // Copy objects, because the merge below resets them in place.
+      const value = target.theming[key];
+      if (!src.theming || !(key in src.theming)) accessibility[key] = value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value;
     }
+    const customCss = target.cosmetics.customCss;
     merge(target.theming, baseTheming);
     merge(target.cosmetics, BC.defaults.cosmetics);
     merge(target, src);
     Object.assign(target.theming, accessibility);
+    if (!src.cosmetics || !("customCss" in src.cosmetics)) target.cosmetics.customCss = customCss;
     target.dashboard.themeImages = BC.themeImages(src.dashboard && src.dashboard.themeImages);
     for (const course of Object.values(target.dashboard.courses || {})) {
       if (!course || typeof course !== "object") continue;

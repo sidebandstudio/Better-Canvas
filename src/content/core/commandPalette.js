@@ -178,6 +178,9 @@
 
     selected = 0;
     inputEl.addEventListener("input", () => { selected = 0; render(inputEl.value); });
+    // A click on the list or a group heading would move focus to the page, and
+    // the keys below only work from the input.
+    cp.addEventListener("mousedown", (e) => { if (e.target !== inputEl) e.preventDefault(); });
     inputEl.addEventListener("keydown", (e) => {
       if (e.key === "ArrowDown") { e.preventDefault(); setSelected(selected + 1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); setSelected(selected - 1); }

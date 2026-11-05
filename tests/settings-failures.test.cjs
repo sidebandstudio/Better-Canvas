@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { root, load, domContext, settle, settingsUIFiles } = require("./audit-helpers.cjs");
 
-function setup() {
+function setup(save = async () => { throw Error("Quota exceeded"); }) {
   const { dom, context } = domContext('<div id="root"></div>', { chrome: { runtime: { getURL: (s) => s }, storage: { onChanged: { addListener() {} } } } });
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
   load(context, ...manifest.content_scripts[0].js.filter((file) => file !== "src/content/content.js"), ...settingsUIFiles());
@@ -12,7 +12,7 @@ function setup() {
   BC.toast = Object.fromEntries(["success", "error", "warn"].map((type) => [type, (text) => messages.push({ type, text })]));
   BC.util.warn = () => {};
   const element = dom.window.document.getElementById("root");
-  const store = BC.SettingsUI.render(element, { getState: BC.cloneDefaults, save: async () => { throw Error("Quota exceeded"); } });
+  const store = BC.SettingsUI.render(element, { getState: BC.cloneDefaults, save });
   return { dom, context, messages, element, store };
 }
 test("Apply waits for storage and displays an error without claiming success", async () => {
@@ -103,4 +103,63 @@ test("quota rejection keeps the settings edit, error and automatic retry value",
     assert.equal(store.saveError, null);
     assert.equal(alert.hidden, true);
   } finally { store?.destroy(); page.dom.window.close(); }
+});
+test("Save current look leaves out the settings a theme keeps", async () => {
+  const s = setup(async (state) => state);
+  try {
+    s.store.set((d) => { d.theming.reducedMotion = true; d.theming.fontSizeScale = "xl"; d.theming.logo.mode = "hide"; d.theming.accentColor = "#ff0000"; });
+    [...s.element.querySelectorAll("button")].find((b) => b.textContent.trim() === "Save current look").click();
+    await s.store.flush();
+    const saved = s.store.get().customThemes[0].settings.theming;
+    assert.equal(saved.accentColor, "#ff0000");
+    for (const key of s.context.BC.THEME_KEEPS) assert.equal(Object.hasOwn(saved, key), false, key);
+  } finally { s.store.destroy(); s.dom.window.close(); }
+});
+test("Dashboard course rows show the stored colour and hidden state as soon as they load", async () => {
+  const { dom, context } = domContext('<div id="root"></div>', { chrome: { runtime: { getURL: (s) => s }, storage: { onChanged: { addListener() {} } } } });
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+  load(context, ...manifest.content_scripts[0].js.filter((file) => file !== "src/content/content.js"), ...settingsUIFiles());
+  const BC = context.BC, state = BC.cloneDefaults();
+  state.dashboard.courses["1"] = { hidden: true, color: "#ff0000" };
+  const store = BC.SettingsUI.render(dom.window.document.getElementById("root"), {
+    getState: () => state, save: async (s) => s,
+    getCourses: async () => [{ id: "1", name: "Bio", code: "B1", color: "" }],
+  }, { initialTab: "dashboard" });
+  try {
+    for (let i = 0; i < 5; i++) await settle();
+    const row = dom.window.document.querySelector(".bcs-course");
+    assert.equal(row.classList.contains("bcs-course--hidden"), true);
+    assert.equal(row.querySelector(".bcs-course__swatch").style.background, "rgb(255, 0, 0)");
+  } finally { store.destroy(); dom.window.close(); }
+});
+
+test("handing over after an update gives Canvas its clicks back when the settings panel was open", async () => {
+  const db = require("./storage-harness.cjs").database();
+  const chrome = db.client().chrome;
+  chrome.runtime.onMessage = { addListener() {} };
+  const page = domContext('<div id="bc-drawer" data-bc-node="bc-drawer" style="display: block"></div>', { chrome });
+  try {
+    page.dom.window.document.body.inert = true;   // a dead copy's open panel
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+    load(page.context, ...manifest.content_scripts[0].js);
+    assert.equal(page.dom.window.document.body.inert, false);
+    assert.equal(page.dom.window.document.getElementById("bc-drawer"), null);
+    let closed = 0;
+    page.context.BC.features.settingsPanel.close = () => { closed++; };
+    page.dom.window.dispatchEvent(new page.dom.window.CustomEvent("bc:retire"));
+    assert.equal(closed, 1, "a live copy closes its panel before stepping aside");
+  } finally { page.dom.window.close(); }
+});
+
+test("picking a light palette after a light scene shows that palette", async () => {
+  const s = setup(async (state) => state);
+  try {
+    s.store.set((d) => { d.theming.lightBg = "#b4ced4"; });
+    s.context.BC.SettingsUI.goto("theming");
+    const select = s.element.querySelector('[aria-label="Light palette"]');
+    const pick = select.tagName === "SELECT" ? select : select.querySelector("select");
+    pick.value = "ocean"; pick.dispatchEvent(new s.dom.window.Event("change", { bubbles: true }));
+    assert.equal(s.store.get().theming.lightPreset, "ocean");
+    assert.equal(s.store.get().theming.lightBg, "");
+  } finally { s.store.destroy(); s.dom.window.close(); }
 });

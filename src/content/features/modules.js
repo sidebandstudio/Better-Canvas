@@ -54,7 +54,8 @@
       let done = 0, total = 0;
       for (const m of mods) {
         const req = (m.items || []).filter((it) => it.completion_requirement);
-        if (!req.length) continue;
+        // Canvas sends completion only to students. A teacher's modules have none.
+        if (!req.some((it) => "completed" in it.completion_requirement)) continue;
         // A "complete one item" module needs one requirement, not all of them, and
         // Canvas's own completed state wins over the item flags.
         const need = m.requirement_type === "one" ? 1 : req.length;
