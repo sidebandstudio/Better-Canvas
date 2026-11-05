@@ -1387,8 +1387,17 @@
       state.fetchPromise = null;
       rerender(true);
       // Undo re-creates it: Canvas has no restore, so it comes back as a new task.
+      // Its steps, note, tags and the rest move to the new task's key.
       BC.toast.info("Task deleted", { title: keep.title, timeout: 7000, actions: [{ label: "Undo", onClick: () => {
-        BC.api.createPlannerNote(keep).then(() => { state.lastFetchKey = ""; loadAndRender(BC.storage.current, true); })
+        BC.api.createPlannerNote(keep).then((saved) => {
+          const to = saved && saved.id != null ? "planner_note:" + saved.id : null;
+          return to && writeTodoLocal((L) => {
+            for (const name of ["stars", "subtasks", "notes", "tagsByItem", "priorities", "estimates", "scheduled", "status", "snoozed"]) {
+              const m = L[name];
+              if (m && Object.hasOwn(m, from)) { m[to] = m[from]; delete m[from]; }
+            }
+          }).catch(() => {});
+        }).then(() => { state.lastFetchKey = ""; loadAndRender(BC.storage.current, true); })
           .catch((e) => BC.toast.error("Couldn't restore it: " + e.message));
       } }] });
     }).catch((e) => BC.toast.error("Couldn't delete the task: " + e.message));

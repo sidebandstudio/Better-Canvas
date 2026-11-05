@@ -1007,3 +1007,22 @@ test("the planner sends an item's dismissed flag back with its completion", asyn
     assert.deepEqual(copy(calls), [["assignment", 7, true, 8, true]]);
   } finally { page.dom.window.close(); }
 });
+
+test("undoing a deleted task brings back its steps, note and tags under the new task", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const old = "planner_note:3";
+    await BC.storage.updateLocal((d) => { d.todo = { subtasks: { [old]: [{ id: "a", text: "Draft", done: false }] }, notes: { [old]: "Room 204" }, tagsByItem: { [old]: ["exam"] }, stars: { other: true } }; });
+    let undo;
+    BC.toast = { info: (_text, o) => { undo = o.actions[0].onClick; }, error() {} };
+    BC.api = { deletePlannerNote: async () => null, createPlannerNote: async () => ({ id: 12 }) };
+    BC.test.deleteTask({ plannable_type: "planner_note", plannable_id: 3, plannable: { id: 3, title: "Call office" }, plannable_date: new Date(2026, 10, 6, 12).toISOString() });
+    for (let i = 0; i < 5 && !undo; i++) await new Promise((resolve) => setImmediate(resolve));
+    undo();
+    for (let i = 0; i < 20 && !(BC.storage.local.todo.notes || {})["planner_note:12"]; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    const L = BC.storage.local.todo;
+    assert.deepEqual(copy([L.subtasks, L.notes, L.tagsByItem, L.stars]), [
+      { "planner_note:12": [{ id: "a", text: "Draft", done: false }] }, { "planner_note:12": "Room 204" }, { "planner_note:12": ["exam"] }, { other: true },
+    ]);
+  } finally { page.dom.window.close(); }
+});
