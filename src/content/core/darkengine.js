@@ -73,7 +73,7 @@
   const key = (c) => c.r + "," + c.g + "," + c.b;
   // The page under everything, for colours that let it show through.
   let page = { r: 24, g: 24, b: 27, a: 1 };
-  const shownLum = (c) => lum({ r: c.r * c.a + page.r * (1 - c.a), g: c.g * c.a + page.g * (1 - c.a), b: c.b * c.a + page.b * (1 - c.a) });
+  const over = (c, u) => ({ r: c.r * c.a + u.r * (1 - c.a), g: c.g * c.a + u.g * (1 - c.a), b: c.b * c.a + u.b * (1 - c.a), a: 1 });
   function hue(c) {
     const r = c.r / 255, g = c.g / 255, b = c.b / 255;
     const max = Math.max(r, g, b), d = max - Math.min(r, g, b);
@@ -208,9 +208,11 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
         // A solid mid-tone colour we leave as it is. A see-through one shows the
         // dark page under it, so the colour that shows decides: light text where
         // it comes out dark, the chip's dark text where it stays light.
-        const solid = bg.a >= 0.9, shown = solid ? L : shownLum(bg);
+        // decide() looks again once it knows what is under it.
+        const solid = bg.a >= 0.9, shown = solid ? L : lum(over(bg, page));
         r.surf = solid ? (L < MID ? "dark" : "light") : shown < FLIP ? "3" : "light";
         r.chip = solid ? L >= MID : shown >= FLIP;
+        if (solid) r.shown = bg; else r.see = bg;
       }
     } else if (img) {
       r.own = true;
@@ -245,15 +247,31 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
       if (t) return t;
       const tag = p.getAttribute("data-bc-dbg");
       if (tag) return tag.charAt(0) === "h" ? "h" : tag;
-      if (bg.a < 0.9) return shownLum(bg) < FLIP ? "3" : "light";
+      if (bg.a < 0.9) return lum(over(bg, beneath(p, tokens, batch))) < FLIP ? "3" : "light";
       return lum(bg) < MID ? "dark" : "light";
     }
     return "1";
   }
 
+  // What shows under a see-through background: the nearest fill we leave as it
+  // is, or the dark page once that fill is darkened.
+  function beneath(el, tokens, batch) {
+    for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+      const b = batch.get(p);
+      if (b) { if (b.own) return b.shown || page; continue; }
+      const cs = getComputedStyle(p);
+      if (cs.backgroundImage && cs.backgroundImage !== "none") return page;
+      const bg = parse(cs.backgroundColor);
+      if (!bg || bg.a < 0.35) continue;
+      if (tokens[key(bg)] || p.hasAttribute("data-bc-dbg") || lum(bg) >= BG_LIGHT) return page;
+      return bg.a >= 0.9 ? bg : over(bg, beneath(p, tokens, batch));
+    }
+    return page;
+  }
+
   // Whether the nearest ancestor with a background is a solid mid-tone colour that
   // stays light. Photos and images don't count: text over them is left alone.
-  function insideChip(el, batch) {
+  function insideChip(el, tokens, batch) {
     for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
       const b = batch.get(p);
       if (b) { if (b.own) return !!b.chip; continue; }
@@ -262,7 +280,7 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
       const bg = parse(cs.backgroundColor);
       if (!bg || bg.a < 0.35) continue;
       if (p.hasAttribute("data-bc-dbg") || lum(bg) >= BG_LIGHT) return false;
-      return bg.a >= 0.9 ? lum(bg) >= MID : shownLum(bg) >= FLIP;
+      return bg.a >= 0.9 ? lum(bg) >= MID : lum(over(bg, beneath(p, tokens, batch))) >= FLIP;
     }
     return false;
   }
@@ -270,6 +288,11 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
   function decide(r, tokens, batch) {
     const out = { dbg: null, dfg: null, dbd: null };
     if (r.el === document.body || r.el === document.documentElement) { r.surf = "1"; return out; }
+    if (r.see) {
+      r.shown = over(r.see, beneath(r.el, tokens, batch));
+      r.chip = lum(r.shown) >= FLIP;
+      r.surf = r.chip ? "light" : "3";
+    }
     if (r.kind) {
       if (r.kind === "tint") { out.dbg = "h" + r.hue; r.surf = "h"; }
       else if (r.kind === "grey") { out.dbg = "3"; r.surf = "3"; }
@@ -289,7 +312,7 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
     // A solid mid-tone background we leave light (a pasted table colour, a pale
     // chip) kept the page's light text: light text on #ffd966 measured 1.24:1.
     // The chip pins dark text, and so does light text inside one, links included.
-    if (!darkAfter && ((r.own && r.chip) || (r.fgLight && insideChip(r.el, batch)))) out.dfg = "k";
+    if (!darkAfter && ((r.own && r.chip) || (r.fgLight && insideChip(r.el, tokens, batch)))) out.dfg = "k";
     if (r.fgDark) {
       if (!darkAfter) {
         // Dark text on a chip we leave light. It may only be dark because it

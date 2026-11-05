@@ -1126,6 +1126,25 @@ test("dark mode lightens dark text on a see-through mid-tone background instead 
   } finally { dom.window.close(); }
 });
 
+test("dark mode reads a see-through colour over a cell it leaves light by that cell, not the page", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<style>body { color: rgb(230, 230, 235); }</style>' +
+    '<div id="content"><div id="cell" style="background-color: rgb(255, 217, 102); color: rgb(45, 59, 69)">' +
+    '<div id="wash" style="background-color: rgba(199, 205, 209, 0.5); color: rgb(45, 59, 69)">Due <span id="washLight" style="color: rgb(230, 230, 235)">Friday</span></div></div>' +
+    '<div id="glass" style="background-color: rgba(199, 205, 209, 0.5); color: rgb(45, 59, 69)">page</div></div>');
+  try {
+    loadDom(context, "src/content/core/darkengine.js");
+    dom.window.document.documentElement.classList.add("bc-dark");
+    context.BC.darkEngine.start();
+    const tag = (id) => dom.window.document.getElementById(id).getAttribute("data-bc-dfg");
+    assert.equal(tag("cell"), "k");
+    assert.equal(tag("wash"), "k", "grey over yellow still shows light, so its dark text stays");
+    assert.equal(tag("washLight"), "k");
+    assert.equal(tag("glass"), "t", "the same grey over the dark page still gets light text");
+    context.BC.darkEngine.stop();
+  } finally { dom.window.close(); }
+});
+
 test("a planner row drawn before another tab's override uses the override the last fetch brought", async () => {
   const { BC, page } = await plannerContext("2026-11-06T10:00:00");
   try {
