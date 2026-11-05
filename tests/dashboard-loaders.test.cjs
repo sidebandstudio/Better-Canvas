@@ -131,3 +131,17 @@ test("course files come newest first, so the page limit keeps recent uploads", a
     assert.match(urls[0], /^\/api\/v1\/courses\/9\/files\?sort=updated_at&order=desc&/);
   } finally { dom.window.close(); }
 });
+
+
+test("dashboard cards take the student's course colours, which Canvas leaves off the cards", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const api = context.BC.api;
+    let colors = async () => ({ custom_colors: { course_9: "#3b7ea1", user_1: "#000000" } });
+    api.getJSON = (url) => url.endsWith("/colors") ? colors() : Promise.resolve([{ id: "9", color: null }, { id: "10", color: null }, { id: "11", color: "#ff8800" }]);
+    assert.deepEqual(JSON.parse(JSON.stringify(await api.dashboardCards())), [{ id: "9", color: "#3b7ea1" }, { id: "10", color: null }, { id: "11", color: "#ff8800" }]);
+    colors = async () => { throw Error("Canvas API 500"); };
+    assert.equal((await api.dashboardCards()).length, 3);
+  } finally { dom.window.close(); }
+});
