@@ -119,3 +119,15 @@ test("changing a planner override keeps Canvas's dismissed flag", async () => {
     ]);
   } finally { dom.window.close(); }
 });
+
+
+test("course files come newest first, so the page limit keeps recent uploads", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const urls = [];
+    context.BC.api.getList = async (url) => { urls.push(url); return []; };
+    await context.BC.api.courseFiles(9, 3);
+    assert.match(urls[0], /^\/api\/v1\/courses\/9\/files\?sort=updated_at&order=desc&/);
+  } finally { dom.window.close(); }
+});

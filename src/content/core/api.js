@@ -178,10 +178,11 @@
 
     // maxPages is caller-controlled: the cross-course library fans out over ~20
     // courses, where 20 pages each is 400 requests. A per-course view can ask for
-    // more.
+    // more. Newest first, so a cut-off list drops old files rather than whatever
+    // sorts last by name.
     courseFiles(courseId, maxPages = 20) {
       return api.getList(
-        `/api/v1/courses/${courseId}/files?per_page=100`,
+        `/api/v1/courses/${courseId}/files?sort=updated_at&order=desc&per_page=100`,
         { maxPages, ttl: TTL.files }
       );
     },
