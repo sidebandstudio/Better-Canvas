@@ -316,3 +316,25 @@ test("our style tags keep their order after Canvas adds a stylesheet at the end 
     assert.deepEqual(order, ["canvas", ...keys]);
   } finally { dom.window.close(); }
 });
+
+
+test("course menu settings leave group and Account menus alone", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const menu = '<ul id="section-tabs"><li><a href="#">Home</a></li><li><a href="#">Files</a></li><li><a href="#">Settings</a></li></ul>';
+  for (const [where, inCourse] of [["/groups/5/files", false], ["/profile/settings", false], ["/courses/9/modules", true]]) {
+    const { dom, context } = domContext(menu);
+    dom.reconfigure({ url: "http://bc-test.instructure.com" + where });
+    try {
+      load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/lifecycle.js", "src/content/core/injector.js");
+      const saved = [];
+      context.BC.storage = { local: {}, updateLocal: async (fn) => { const d = {}; fn(d); saved.push(d); } };
+      load(context, "src/content/features/navigation.js");
+      const settings = context.BC.cloneDefaults();
+      settings.navigation.course = { hidden: ["Files"], order: [], customLinks: [] };
+      context.BC.registry.get("navigation").apply(settings, { page: "other", courseId: context.BC.util.courseIdFromHref(where) });
+      const files = dom.window.document.querySelectorAll("#section-tabs > li")[1];
+      assert.equal(files.style.display, inCourse ? "none" : "", where);
+      assert.equal(saved.some((d) => d.courseNavItems), inCourse, where);
+    } finally { dom.window.close(); }
+  }
+});
