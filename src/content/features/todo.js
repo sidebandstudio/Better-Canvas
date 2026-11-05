@@ -1272,7 +1272,10 @@
         return noteDone(keyForItem(it), complete).catch(() => {});
       }).then(() => true).catch(() => false);
     }
-    const o = it.planner_override || {};
+    // The row may hold an old copy. Another tab may have made an override since,
+    // so its id and dismissed flag come from the copy the last fetch brought.
+    const cur = state.canvasItems.find((x) => keyForItem(x) === keyForItem(it)) || it;
+    const o = cur.planner_override || it.planner_override || {};
     return BC.api.setPlannerComplete(it.plannable_type, (it.plannable && it.plannable.id) || it.plannable_id, complete, o.id, o.dismissed)
       .then((saved) => {
         // Keep the id Canvas assigned, or the next toggle POSTs a second override

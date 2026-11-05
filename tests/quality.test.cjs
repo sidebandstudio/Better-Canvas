@@ -1114,3 +1114,22 @@ test("dark mode lightens dark text on a see-through mid-tone background instead 
     context.BC.darkEngine.stop();
   } finally { dom.window.close(); }
 });
+
+test("a planner row drawn before another tab's override uses the override the last fetch brought", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    let override = null;
+    const calls = [];
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItemDone: () => false,
+      plannerItems: async () => [{ plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 6, 23, 59).toISOString(), planner_override: override }],
+      setPlannerComplete: async (...args) => { calls.push(args); return { id: 50 }; } };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    const drawn = BC.test.state.items[0];
+    override = { id: 50, marked_complete: false, dismissed: true };
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    await BC.test.setComplete(drawn, true);
+    assert.deepEqual(copy(calls), [["assignment", 7, true, 50, true]]);
+  } finally { page.dom.window.close(); }
+});
