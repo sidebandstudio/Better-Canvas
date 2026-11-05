@@ -997,3 +997,13 @@ test("checking off a planner row drawn before the last refetch updates the item 
     assert.deepEqual(copy(BC.test.state.canvasItems), []);
   } finally { page.dom.window.close(); }
 });
+
+test("the planner sends an item's dismissed flag back with its completion", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const calls = [];
+    BC.api = { setPlannerComplete: async (...args) => { calls.push(args); return { id: 8 }; } };
+    await BC.test.setComplete({ plannable_type: "assignment", plannable: { id: 7 }, planner_override: { id: 8, marked_complete: false, dismissed: true } }, true);
+    assert.deepEqual(copy(calls), [["assignment", 7, true, 8, true]]);
+  } finally { page.dom.window.close(); }
+});

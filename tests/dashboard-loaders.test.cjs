@@ -102,3 +102,20 @@ test("modules too big for Canvas to inline fetch their items separately", async 
     assert.deepEqual(paths.slice(1), ["/api/v1/courses/7/modules/2/items?per_page=100"]);
   } finally { dom.window.close(); }
 });
+
+
+
+test("changing a planner override keeps Canvas's dismissed flag", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const BC = context.BC, bodies = [];
+    BC.api.mutate = async (method, path, body) => { bodies.push([method, path, body]); return { id: 5 }; };
+    await BC.api.setPlannerComplete("assignment", 1, true, 5, true);
+    await BC.api.setPlannerComplete("assignment", 1, false, 5, false);
+    assert.deepEqual(JSON.parse(JSON.stringify(bodies)), [
+      ["PUT", "/api/v1/planner/overrides/5", { marked_complete: true, dismissed: true }],
+      ["PUT", "/api/v1/planner/overrides/5", { marked_complete: false, dismissed: false }],
+    ]);
+  } finally { dom.window.close(); }
+});

@@ -226,11 +226,13 @@
       return api.getList(q, { maxPages: 10, ttl: TTL.planner });
     },
 
-    async setPlannerComplete(plannableType, plannableId, complete, overrideId) {
+    // Canvas's update reads a missing `dismissed` as false, so it is sent back as it
+    // was. Leaving it out undid a dismissal made in Canvas's own planner.
+    async setPlannerComplete(plannableType, plannableId, complete, overrideId, dismissed) {
       const method = overrideId ? "PUT" : "POST";
       const path = overrideId ? "/api/v1/planner/overrides/" + overrideId : "/api/v1/planner/overrides";
       const body = overrideId
-        ? { marked_complete: !!complete }
+        ? { marked_complete: !!complete, dismissed: !!dismissed }
         : { plannable_type: plannableType, plannable_id: plannableId, marked_complete: !!complete };
       return plannerMutation(method, path, body);
     },

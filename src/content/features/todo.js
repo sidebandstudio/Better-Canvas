@@ -1272,8 +1272,8 @@
         return noteDone(keyForItem(it), complete).catch(() => {});
       }).then(() => true).catch(() => false);
     }
-    const override = it.planner_override && it.planner_override.id;
-    return BC.api.setPlannerComplete(it.plannable_type, (it.plannable && it.plannable.id) || it.plannable_id, complete, override)
+    const o = it.planner_override || {};
+    return BC.api.setPlannerComplete(it.plannable_type, (it.plannable && it.plannable.id) || it.plannable_id, complete, o.id, o.dismissed)
       .then((saved) => {
         // Keep the id Canvas assigned, or the next toggle POSTs a second override
         // for the same item, which Canvas rejects.
