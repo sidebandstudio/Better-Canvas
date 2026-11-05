@@ -96,3 +96,25 @@ test("settings flush rejects failed saves so Apply and import can await persiste
     store.destroy();
   } finally { dom.window.close(); }
 });
+
+
+test("the options page finds a Canvas tab opened after it first found none, or after the first one closed", async () => {
+  const s = await surface("options");
+  try {
+    const chrome = s.dom.window.chrome, open = new Map();
+    chrome.permissions = { getAll: async () => ({ origins: [] }) };
+    chrome.tabs = {
+      query: async () => [...open.keys()].map((id) => ({ id })),
+      sendMessage: (id, message, callback) => {
+        if (!open.has(id)) { chrome.runtime.lastError = { message: "closed" }; callback(); delete chrome.runtime.lastError; return; }
+        callback(message.type === "bc:ping" ? { canvas: true } : { ok: true, courses: [{ id: String(id) }] });
+      },
+    };
+    await assert.rejects(s.adapter.getCourses(), /no Canvas tab/);
+    open.set(4, true);
+    assert.deepEqual(copy(await s.adapter.getCourses()), [{ id: "4" }]);
+    open.delete(4); open.set(5, true);
+    await assert.rejects(s.adapter.getCourses(), /request failed/);
+    assert.deepEqual(copy(await s.adapter.getCourses()), [{ id: "5" }]);
+  } finally { s.dom.window.close(); }
+});

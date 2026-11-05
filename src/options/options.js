@@ -17,7 +17,7 @@
   function findCanvasTab() {
     if (tabP && Date.now() - tabAt < 30000) return tabP;
     tabAt = Date.now();
-    tabP = (async () => {
+    const found = (async () => {
       const perms = await chrome.permissions.getAll();
       const patterns = new Set(["*://*.instructure.com/*", ...(perms.origins || []).filter((p) => p !== "https://api.openverse.org/*")]);
       let tabs = [];
@@ -27,12 +27,16 @@
       for (const t of tabs) { const r = await sendToTab(t.id, { type: "bc:ping" }); if (r && r.canvas) return t; }
       return null;
     })().catch(() => null);
-    return tabP;
+    // A miss isn't kept: someone who opens Canvas after the first try can try again.
+    found.then((tab) => { if (!tab && tabP === found) tabP = null; });
+    return (tabP = found);
   }
   async function fromTab(type) {
     const tab = await findCanvasTab();
     if (!tab) throw new Error("no Canvas tab");
     const resp = await sendToTab(tab.id, { type });
+    // No answer means the tab closed or left Canvas, so look again next time.
+    if (!resp) tabP = null;
     if (!resp || !resp.ok) throw new Error("request failed");
     return resp.courses;
   }
