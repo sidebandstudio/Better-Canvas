@@ -410,18 +410,19 @@ test("Ctrl+Space and Ctrl+Plus record as shortcuts that fire", () => {
     BC.storage = { current: { enabled: true, shortcuts: { enabled: true } } };
     BC.shortcuts._install();
     const recorded = [];
-    for (const key of [" ", "+"]) {
+    for (const [key, ctrlKey] of [[" ", true], ["+", true], ["+", false]]) {
       let combo = "";
       const btn = BC.SettingsComponents.keybind({ get: () => combo, set: (v) => { combo = v; } });
       doc.getElementById("root").append(btn);
       btn.click();
-      btn.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey, bubbles: true, cancelable: true }));
       recorded.push(combo);
       let fired = 0;
       BC.shortcuts.register("test-" + recorded.length, combo, () => { fired++; });
-      doc.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true }));
+      doc.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey, bubbles: true, cancelable: true }));
       assert.equal(fired, 1, JSON.stringify(combo));
+      BC.shortcuts.unregister("test-" + recorded.length);
     }
-    assert.deepEqual(recorded, ["Mod+Space", "Mod+Plus"]);
+    assert.deepEqual(recorded, ["Mod+Space", "Mod+Plus", "Plus"]);
   } finally { dom.window.close(); }
 });

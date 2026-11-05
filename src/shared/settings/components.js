@@ -537,8 +537,9 @@
       if (chordBuf) {
         set(chordBuf + " " + (e.key || "").toLowerCase());
         chordBuf = ""; clearTimeout(chordTO); recording = false; refresh(); btn.blur();
-      } else if (parts.length === 1 && e.key && e.key.length === 1) {
-        // A plain letter may be the first key of a chord ("g" then "d").
+      } else if (parts.length === 1 && e.key && e.key.length === 1 && e.key !== "+") {
+        // A plain letter may be the first key of a chord ("g" then "d"). A plain
+        // "+" (the keypad's) is saved by name instead.
         chordBuf = (e.key || "").toLowerCase();
         chordTO = setTimeout(() => { set(chordBuf); chordBuf = ""; recording = false; refresh(); btn.blur(); }, 800);
       } else {
