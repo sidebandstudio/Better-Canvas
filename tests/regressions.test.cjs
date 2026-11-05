@@ -399,3 +399,29 @@ test("the People page tool bar follows the roster and attendance switches", asyn
     assert.deepEqual(buttons(), ["Export attendance (CSV)"]);
   } finally { dom.window.close(); }
 });
+
+
+test("Ctrl+Space and Ctrl+Plus record as shortcuts that fire", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="root"></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/shortcuts.js", "src/shared/settings/components.js");
+    const BC = context.BC, doc = dom.window.document;
+    BC.storage = { current: { enabled: true, shortcuts: { enabled: true } } };
+    BC.shortcuts._install();
+    const recorded = [];
+    for (const key of [" ", "+"]) {
+      let combo = "";
+      const btn = BC.SettingsComponents.keybind({ get: () => combo, set: (v) => { combo = v; } });
+      doc.getElementById("root").append(btn);
+      btn.click();
+      btn.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true }));
+      recorded.push(combo);
+      let fired = 0;
+      BC.shortcuts.register("test-" + recorded.length, combo, () => { fired++; });
+      doc.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true }));
+      assert.equal(fired, 1, JSON.stringify(combo));
+    }
+    assert.deepEqual(recorded, ["Mod+Space", "Mod+Plus"]);
+  } finally { dom.window.close(); }
+});

@@ -526,7 +526,11 @@
       // With Alt held, macOS reports the Option-character (⌥T is "†"); record the
       // physical letter so the binding reads as Alt+T and matches on every OS.
       const physical = e.altKey && /^(Key[A-Z]|Digit[0-9])$/.test(e.code || "") ? e.code.slice(-1) : null;
+      // Space and "+" get names: a literal space split the combo into a chord and a
+      // literal "+" split it at the wrong place, so neither binding could ever fire.
       if (physical) parts.push(physical);
+      else if (e.key === " ") parts.push("Space");
+      else if (e.key === "+") parts.push("Plus");
       else if (e.key.length === 1) parts.push(e.key.toUpperCase());
       else parts.push(e.key);
       const combo = parts.join("+");
