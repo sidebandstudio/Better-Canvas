@@ -163,3 +163,27 @@ test("picking a light palette after a light scene shows that palette", async () 
     assert.equal(s.store.get().theming.lightBg, "");
   } finally { s.store.destroy(); s.dom.window.close(); }
 });
+
+
+
+test("reordering a filtered course list keeps the other courses where they were", async () => {
+  const { dom, context } = domContext('<div id="root"></div>', { chrome: { runtime: { getURL: (s) => s }, storage: { onChanged: { addListener() {} } } } });
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+  load(context, ...manifest.content_scripts[0].js.filter((file) => file !== "src/content/content.js"), ...settingsUIFiles());
+  const BC = context.BC;
+  BC.util.warn = () => {};
+  const state = BC.cloneDefaults();
+  state.dashboard.courseOrder = ["1", "2", "3", "4"];
+  const courses = [["1", "MATH 101"], ["2", "CS 1"], ["3", "BIO 1"], ["4", "CS 2"]].map(([id, name]) => ({ id, name, code: "" }));
+  const store = BC.SettingsUI.render(dom.window.document.getElementById("root"), { getState: () => state, save: async () => {}, getCourses: async () => courses });
+  try {
+    BC.SettingsUI.goto("dashboard");
+    await settle(); await settle();
+    const filter = dom.window.document.querySelector('[aria-label="Filter courses"]');
+    filter.value = "cs"; filter.dispatchEvent(new dom.window.Event("input"));
+    const grips = dom.window.document.querySelectorAll(".bcs-courses .bcs-sortable__grip");
+    assert.equal(grips.length, 2);
+    grips[1].dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    assert.deepEqual(JSON.parse(JSON.stringify(store.get().dashboard.courseOrder)), ["1", "4", "3", "2"]);
+  } finally { store.destroy(); dom.window.close(); }
+});
