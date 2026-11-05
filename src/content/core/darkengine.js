@@ -41,6 +41,7 @@
   const BG_WHITE = 0.96;     // …and this light counts as "white" rather than "grey"
   const MID = 0.45;          // below this a surface already reads as dark
   const FG_DARK = 0.26;      // text darker than this can't hold 4.5:1 on our surfaces
+  const FLIP = 0.18;         // light text reads better below this, dark text above
   const NEUTRAL = 10;        // max channel spread (0–255) still counted as grey
 
   // ---- colour maths ---------------------------------------------------------
@@ -70,6 +71,9 @@
   const lum = (c) => 0.2126 * chan(c.r) + 0.7152 * chan(c.g) + 0.0722 * chan(c.b);
   const spread = (c) => Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
   const key = (c) => c.r + "," + c.g + "," + c.b;
+  // The page under everything, for colours that let it show through.
+  let page = { r: 24, g: 24, b: 27, a: 1 };
+  const shownLum = (c) => lum({ r: c.r * c.a + page.r * (1 - c.a), g: c.g * c.a + page.g * (1 - c.a), b: c.b * c.a + page.b * (1 - c.a) });
   function hue(c) {
     const r = c.r / 255, g = c.g / 255, b = c.b / 255;
     const max = Math.max(r, g, b), d = max - Math.min(r, g, b);
@@ -152,6 +156,7 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
     for (const n of ["1", "2", "3"]) {
       const c = hexToRgb(cs.getPropertyValue("--bc-surface-" + n)) || parse(cs.getPropertyValue("--bc-surface-" + n));
       if (c) out[key(c)] = n;
+      if (c && n === "1") page = c;
     }
     return out;
   }
@@ -201,10 +206,11 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
         }
       } else {
         // A solid mid-tone colour we leave as it is. A see-through one shows the
-        // dark page under it, where dark text would be unreadable, so its text is
-        // treated as sitting on a dark surface.
-        r.surf = L < MID ? "dark" : bg.a >= 0.9 ? "light" : "3";
-        r.chip = L >= MID && bg.a >= 0.9;
+        // dark page under it, so the colour that shows decides: light text where
+        // it comes out dark, the chip's dark text where it stays light.
+        const solid = bg.a >= 0.9, shown = solid ? L : shownLum(bg);
+        r.surf = solid ? (L < MID ? "dark" : "light") : shown < FLIP ? "3" : "light";
+        r.chip = solid ? L >= MID : shown >= FLIP;
       }
     } else if (img) {
       r.own = true;
@@ -239,7 +245,8 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
       if (t) return t;
       const tag = p.getAttribute("data-bc-dbg");
       if (tag) return tag.charAt(0) === "h" ? "h" : tag;
-      return lum(bg) < MID ? "dark" : bg.a >= 0.9 ? "light" : "3";
+      if (bg.a < 0.9) return shownLum(bg) < FLIP ? "3" : "light";
+      return lum(bg) < MID ? "dark" : "light";
     }
     return "1";
   }
@@ -254,7 +261,8 @@ html.bc-dark [data-bc-dbd~="x"] { text-shadow: none !important; }
       if (cs.backgroundImage && cs.backgroundImage !== "none") return false;
       const bg = parse(cs.backgroundColor);
       if (!bg || bg.a < 0.35) continue;
-      return !p.hasAttribute("data-bc-dbg") && bg.a >= 0.9 && lum(bg) >= MID && lum(bg) < BG_LIGHT;
+      if (p.hasAttribute("data-bc-dbg") || lum(bg) >= BG_LIGHT) return false;
+      return bg.a >= 0.9 ? lum(bg) >= MID : shownLum(bg) >= FLIP;
     }
     return false;
   }

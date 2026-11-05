@@ -1099,7 +1099,8 @@ test("dark mode lightens dark text on a see-through mid-tone background instead 
   const { domContext, load: loadDom } = require("./audit-helpers.cjs");
   const { dom, context } = domContext('<style>body { color: rgb(230, 230, 235); }</style>' +
     '<div id="content"><div id="glass" style="background-color: rgba(199, 205, 209, 0.5); color: rgb(45, 59, 69)">Due <span id="inner" style="color: rgb(45, 59, 69)">Friday</span></div>' +
-    '<div id="solid" style="background-color: rgb(255, 217, 102); color: rgb(45, 59, 69)">chip</div></div>');
+    '<div id="solid" style="background-color: rgb(255, 217, 102); color: rgb(45, 59, 69)">chip</div>' +
+    '<div id="frosted" style="background-color: rgba(199, 205, 209, 0.85); color: rgb(45, 59, 69)">mostly <span id="frostedLight" style="color: rgb(230, 230, 235)">covers</span></div></div>');
   try {
     loadDom(context, "src/content/core/darkengine.js");
     dom.window.document.documentElement.classList.add("bc-dark");
@@ -1108,6 +1109,8 @@ test("dark mode lightens dark text on a see-through mid-tone background instead 
     assert.equal(tag("glass"), "t");
     assert.equal(tag("inner"), "t");
     assert.equal(tag("solid"), "k", "a solid mid-tone chip still pins dark text");
+    assert.equal(tag("frosted"), "k", "mostly opaque, the grey still shows light, so its dark text stays");
+    assert.equal(tag("frostedLight"), "k");
     context.BC.darkEngine.stop();
   } finally { dom.window.close(); }
 });
