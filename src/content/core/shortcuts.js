@@ -46,7 +46,9 @@
   function eventMatchesToken(ev, token) {
     // Token: "Mod+K", "Mod+Shift+D", "g", "ArrowDown"
     const parts = token.split("+").map((s) => s.trim());
-    const key = parts.pop().toLowerCase();
+    const named = { space: " ", plus: "+" };
+    const last = parts.pop().toLowerCase();
+    const key = named[last] || last;
     const need = { mod: false, shift: false, alt: false };
     for (const p of parts) {
       const q = p.toLowerCase();

@@ -315,3 +315,20 @@ test("imported settings and themes can't turn a section or list into another typ
   assert.equal(broken.theming.darkMode, "on");
   assert.equal(broken.theming.radius, BC.defaults.theming.radius);
 });
+
+test("links clear 4.5:1 on every surface in both modes of every preset", () => {
+  const ctx = context();
+  for (const file of ["src/content/core/color.js", "src/shared/tokens.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), ctx);
+  const { BC } = ctx, C = BC.color, short = [];
+  for (const p of BC.PRESET_THEMES) {
+    const r = BC.tokens.resolve({ ...BC.defaults.theming, ...p.settings.theming });
+    for (const mode of ["light", "dark"]) for (const surface of ["surface-1", "surface-2", "surface-3"]) {
+      const ratio = C.contrastRatio(r[mode].link, r[mode][surface]);
+      if (ratio < 4.5) short.push(p.id + " " + mode + " " + surface + " " + ratio.toFixed(2));
+    }
+  }
+  assert.deepEqual(short, []);
+  // A mid-grey page has no link colour that clears both it and white panels.
+  const grey = BC.tokens.resolve({ ...BC.defaults.theming, lightBg: "#777777" }).light;
+  assert.ok(C.contrastRatio(grey.link, grey["surface-2"]) >= 4.5, grey.link + " on " + grey["surface-2"]);
+});

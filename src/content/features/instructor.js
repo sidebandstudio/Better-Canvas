@@ -125,9 +125,15 @@
       BC.injector.removeNode("bc-roster-btn");
     } else {
       const host = BC.util.firstOf(["#content", "#main"]) || document.body;
+      // The bar holds the buttons for the tools that were on when it was built, so
+      // switching one on or off builds it again.
+      const sig = (settings.instructor.rosterExport ? "r" : "") + (settings.instructor.attendanceQuick ? "a" : "");
+      const built = document.querySelector('[data-bc-node="bc-roster-btn"]');
+      if (built && built.dataset.bcSig !== sig) built.remove();
       BC.injector.ensureNode("bc-roster-btn", host, () => {
         const bar = document.createElement("div");
         bar.className = "bc-instr-bar";
+        bar.dataset.bcSig = sig;
         if (settings.instructor.rosterExport) {
           const btn = document.createElement("button");
           btn.className = "bc-btn";

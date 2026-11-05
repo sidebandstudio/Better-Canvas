@@ -299,3 +299,130 @@ test("focus returns into a shadow root after a dialog, and palette clicks keep f
     assert.equal(down.defaultPrevented, true);
   } finally { dom.window.close(); }
 });
+
+
+
+test("our style tags keep their order after Canvas adds a stylesheet at the end of head", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext("<head></head><body></body>");
+  try {
+    load(context, "src/content/core/injector.js");
+    const doc = dom.window.document, keys = ["bc-static", "bc-theming", "bc-bg", "bc-custom-css", "bc-experience"];
+    const applyAll = () => keys.forEach((k) => context.BC.injector.setStyle(k, "/* " + k + " */"));
+    applyAll();
+    doc.head.appendChild(doc.createElement("style")).setAttribute("data-emotion", "css");
+    for (let i = 0; i < 5; i++) applyAll();
+    const order = [...doc.head.children].map((n) => n.getAttribute("data-better-canvas") || "canvas");
+    assert.deepEqual(order, ["canvas", ...keys]);
+  } finally { dom.window.close(); }
+});
+
+
+test("course menu settings leave group and Account menus alone", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const menu = '<ul id="section-tabs"><li><a href="#">Home</a></li><li><a href="#">Files</a></li><li><a href="#">Settings</a></li></ul>';
+  for (const [where, inCourse] of [["/groups/5/files", false], ["/profile/settings", false], ["/courses/9/modules", true]]) {
+    const { dom, context } = domContext(menu);
+    dom.reconfigure({ url: "http://bc-test.instructure.com" + where });
+    try {
+      load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/lifecycle.js", "src/content/core/injector.js");
+      const saved = [];
+      context.BC.storage = { local: {}, updateLocal: async (fn) => { const d = {}; fn(d); saved.push(d); } };
+      load(context, "src/content/features/navigation.js");
+      const settings = context.BC.cloneDefaults();
+      settings.navigation.course = { hidden: ["Files"], order: [], customLinks: [] };
+      context.BC.registry.get("navigation").apply(settings, { page: "other", courseId: context.BC.util.courseIdFromHref(where) });
+      const files = dom.window.document.querySelectorAll("#section-tabs > li")[1];
+      assert.equal(files.style.display, inCourse ? "none" : "", where);
+      assert.equal(saved.some((d) => d.courseNavItems), inCourse, where);
+    } finally { dom.window.close(); }
+  }
+});
+
+
+test("the file library leaves out courses that hide Files instead of calling them failures", async () => {
+  const { load, domContext, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="wrap"><div id="dashboard"></div></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/injector.js");
+    const BC = context.BC;
+    BC.diag = { push() {} };
+    BC.api = {
+      coursesWithScores: async () => [{ id: 1, name: "Biology" }, { id: 2, name: "Modules only" }],
+      courseFiles: async (id) => { if (id === 2) throw Object.assign(Error("Canvas API 401"), { status: 401 }); return [{ id: 10, display_name: "Lab 1.pdf", updated_at: "2026-11-01T00:00:00Z" }]; },
+    };
+    load(context, "src/content/features/files.js");
+    const settings = BC.cloneDefaults();
+    settings.files.enabled = true;
+    BC.registry.get("files").apply(settings, { page: "dashboard" });
+    for (let i = 0; i < 5; i++) await settle();
+    const text = dom.window.document.querySelector(".bc-files-panel").textContent;
+    assert.match(text, /Lab 1\.pdf/);
+    assert.doesNotMatch(text, /couldn't load/i);
+  } finally { dom.window.close(); }
+});
+
+
+test("pages under /dashboard/ such as ePortfolios are not the dashboard", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  for (const [where, page] of [["/", "dashboard"], ["/dashboard", "dashboard"], ["/dashboard/", "dashboard"], ["/dashboard/eportfolios", "other"], ["/dashboard/data_exports", "other"]]) {
+    const { dom, context } = domContext();
+    dom.reconfigure({ url: "http://bc-test.instructure.com" + where });
+    try {
+      load(context, "src/content/core/util.js", "src/content/core/detect.js");
+      assert.equal(context.BC.detect.context().page, page, where);
+    } finally { dom.window.close(); }
+  }
+});
+
+
+test("the People page tool bar follows the roster and attendance switches", async () => {
+  const { load, domContext, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="content"><table><tr id="user_1"><td>Sam</td></tr></table></div>');
+  dom.reconfigure({ url: "http://bc-test.instructure.com/courses/9/users" });
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/lifecycle.js", "src/content/core/injector.js");
+    const BC = context.BC;
+    BC.diag = { push() {} };
+    BC.storage = { local: {} };
+    BC.api = { course: async () => ({ enrollments: [{ type: "teacher" }] }) };
+    load(context, "src/content/features/instructor.js");
+    const settings = BC.cloneDefaults(), ctx = { page: "course", courseId: "9", path: "/courses/9/users" };
+    Object.assign(settings.instructor, { rosterExport: true, attendanceQuick: false, bulkGradeHelpers: false });
+    const run = () => BC.registry.get("instructor").apply(settings, ctx);
+    run(); await settle(); run();
+    const buttons = () => [...dom.window.document.querySelectorAll(".bc-instr-bar button")].map((b) => b.textContent);
+    assert.deepEqual(buttons(), ["Export roster (CSV)"]);
+    settings.instructor.attendanceQuick = true; run();
+    assert.deepEqual(buttons(), ["Export roster (CSV)", "Export attendance (CSV)"]);
+    settings.instructor.rosterExport = false; run();
+    assert.deepEqual(buttons(), ["Export attendance (CSV)"]);
+  } finally { dom.window.close(); }
+});
+
+
+test("Ctrl+Space and Ctrl+Plus record as shortcuts that fire", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="root"></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/shortcuts.js", "src/shared/settings/components.js");
+    const BC = context.BC, doc = dom.window.document;
+    BC.storage = { current: { enabled: true, shortcuts: { enabled: true } } };
+    BC.shortcuts._install();
+    const recorded = [];
+    for (const [key, ctrlKey] of [[" ", true], ["+", true], ["+", false]]) {
+      let combo = "";
+      const btn = BC.SettingsComponents.keybind({ get: () => combo, set: (v) => { combo = v; } });
+      doc.getElementById("root").append(btn);
+      btn.click();
+      btn.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey, bubbles: true, cancelable: true }));
+      recorded.push(combo);
+      let fired = 0;
+      BC.shortcuts.register("test-" + recorded.length, combo, () => { fired++; });
+      doc.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, ctrlKey, bubbles: true, cancelable: true }));
+      assert.equal(fired, 1, JSON.stringify(combo));
+      BC.shortcuts.unregister("test-" + recorded.length);
+    }
+    assert.deepEqual(recorded, ["Mod+Space", "Mod+Plus", "Plus"]);
+  } finally { dom.window.close(); }
+});

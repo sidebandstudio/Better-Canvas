@@ -125,8 +125,17 @@
 
     self() { return api.getJSON("/api/v1/users/self", { ttl: TTL.self }); },
 
-    dashboardCards() {
-      return api.getJSON("/api/v1/dashboard/dashboard_cards", { ttl: TTL.cards });
+    // Canvas fills in a card's colour only for K-5 courses. The colours students
+    // see on their cards are their own course colours, so those fill it in. The
+    // cached cards are filled in place, which the course tabs bar reads directly.
+    async dashboardCards() {
+      const [cards, colors] = await Promise.all([
+        api.getJSON("/api/v1/dashboard/dashboard_cards", { ttl: TTL.cards }),
+        api.getJSON("/api/v1/users/self/colors", { ttl: TTL.self }).catch(() => null),
+      ]);
+      const custom = (colors && colors.custom_colors) || {};
+      for (const c of cards || []) if (!c.color && custom["course_" + c.id]) c.color = custom["course_" + c.id];
+      return cards;
     },
 
     coursesWithScores() {
@@ -178,10 +187,11 @@
 
     // maxPages is caller-controlled: the cross-course library fans out over ~20
     // courses, where 20 pages each is 400 requests. A per-course view can ask for
-    // more.
+    // more. Newest first, so a cut-off list drops old files rather than whatever
+    // sorts last by name.
     courseFiles(courseId, maxPages = 20) {
       return api.getList(
-        `/api/v1/courses/${courseId}/files?per_page=100`,
+        `/api/v1/courses/${courseId}/files?sort=updated_at&order=desc&per_page=100`,
         { maxPages, ttl: TTL.files }
       );
     },
@@ -226,11 +236,13 @@
       return api.getList(q, { maxPages: 10, ttl: TTL.planner });
     },
 
-    async setPlannerComplete(plannableType, plannableId, complete, overrideId) {
+    // Canvas's update reads a missing `dismissed` as false, so it is sent back as it
+    // was. Leaving it out undid a dismissal made in Canvas's own planner.
+    async setPlannerComplete(plannableType, plannableId, complete, overrideId, dismissed) {
       const method = overrideId ? "PUT" : "POST";
       const path = overrideId ? "/api/v1/planner/overrides/" + overrideId : "/api/v1/planner/overrides";
       const body = overrideId
-        ? { marked_complete: !!complete }
+        ? { marked_complete: !!complete, dismissed: !!dismissed }
         : { plannable_type: plannableType, plannable_id: plannableId, marked_complete: !!complete };
       return plannerMutation(method, path, body);
     },

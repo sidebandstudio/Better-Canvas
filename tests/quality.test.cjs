@@ -250,7 +250,7 @@ async function plannerContext(now) {
   const BC = page.context.BC;
   await BC.storage.load(); await BC.storage.loadLocal();
   vm.runInContext(fs.readFileSync(path.join(root, "src/content/features/todo.js"), "utf8")
-    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus, defaultStart, rangeDays, fetchWindow, buildModel };\n  BC.registry.register({"), page.context);
+    .replace("  BC.registry.register({", "  BC.test = { expandRecurring, focusTarget, restoreFocus, defaultStart, rangeDays, fetchWindow, buildModel, setComplete, deleteTask, go, state, keyForItem, mount: (m) => { mounted = m; } };\n  BC.registry.register({"), page.context);
   return { BC, page };
 }
 
@@ -966,4 +966,200 @@ test("scene themes tint only a transparent school logo, on a layer that keeps th
     BC.feature.apply(s); await settle(); await settle();
     assert.equal(html.hasAttribute("data-bc-logo-tint"), false, "an opaque logo keeps its own colours");
   } finally { dom.window.close(); }
+});
+
+test("checking off a planner row drawn before the last refetch updates the item the next render reads", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const item = () => ({ plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 6, 23, 59).toISOString(), course_id: "9" });
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItems: async () => [item()],
+      plannerItemDone: (it) => !!(it.planner_override && it.planner_override.marked_complete),
+      setPlannerComplete: async () => ({ id: 41 }) };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    const drawn = BC.test.state.items[0];
+    BC.test.state.fetchedAt = 0;   // the planner TTL ran out
+    await BC.test.fetchWindow(s, true);
+    assert.notEqual(BC.test.state.items[0], drawn);
+    assert.equal(await BC.test.setComplete(drawn, true), true);
+    assert.deepEqual(copy(BC.test.state.items[0].planner_override || null), { id: 41, marked_complete: true });
+
+    const note = () => ({ plannable_type: "planner_note", plannable_id: 3, plannable: { id: 3, title: "Call office" }, plannable_date: new Date(2026, 10, 6, 12).toISOString() });
+    BC.api.plannerItems = async () => [note()];
+    BC.api.deletePlannerNote = async () => null;
+    BC.toast = { info() {}, error() {} };
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    const old = BC.test.state.canvasItems[0];
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    BC.test.deleteTask(old); await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(copy(BC.test.state.canvasItems), []);
+  } finally { page.dom.window.close(); }
+});
+
+test("the planner sends an item's dismissed flag back with its completion", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const calls = [];
+    BC.api = { setPlannerComplete: async (...args) => { calls.push(args); return { id: 8 }; } };
+    await BC.test.setComplete({ plannable_type: "assignment", plannable: { id: 7 }, planner_override: { id: 8, marked_complete: false, dismissed: true } }, true);
+    assert.deepEqual(copy(calls), [["assignment", 7, true, 8, true]]);
+  } finally { page.dom.window.close(); }
+});
+
+test("undoing a deleted task brings back its steps, note and tags under the new task", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const old = "planner_note:3";
+    await BC.storage.updateLocal((d) => { d.todo = { subtasks: { [old]: [{ id: "a", text: "Draft", done: false }] }, notes: { [old]: "Room 204" }, tagsByItem: { [old]: ["exam"] }, stars: { other: true } }; });
+    let undo;
+    BC.toast = { info: (_text, o) => { undo = o.actions[0].onClick; }, error() {} };
+    BC.api = { deletePlannerNote: async () => null, createPlannerNote: async () => ({ id: 12 }) };
+    BC.test.deleteTask({ plannable_type: "planner_note", plannable_id: 3, plannable: { id: 3, title: "Call office" }, plannable_date: new Date(2026, 10, 6, 12).toISOString() });
+    for (let i = 0; i < 5 && !undo; i++) await new Promise((resolve) => setImmediate(resolve));
+    undo();
+    for (let i = 0; i < 20 && !(BC.storage.local.todo.notes || {})["planner_note:12"]; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    const L = BC.storage.local.todo;
+    assert.deepEqual(copy([L.subtasks, L.notes, L.tagsByItem, L.stars]), [
+      { "planner_note:12": [{ id: "a", text: "Draft", done: false }] }, { "planner_note:12": "Room 204" }, { "planner_note:12": ["exam"] }, { other: true },
+    ]);
+  } finally { page.dom.window.close(); }
+});
+
+test("a planner page change that fails stays on the week still shown and says so", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    const doc = page.dom.window.document, host = doc.body.appendChild(doc.createElement("div"));
+    BC.test.mount({ host, body: host.appendChild(doc.createElement("div")) });
+    const errors = [];
+    BC.toast = { error: (text) => errors.push(text), info() {}, success() {} };
+    BC.util.warn = () => {};
+    let fail = false;
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItemDone: () => false,
+      plannerItems: async () => { if (fail) throw Object.assign(Error("Canvas API 503"), { status: 503 }); return [{ plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 6, 23, 59).toISOString() }]; } };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    fail = true;
+    BC.test.go(1);
+    for (let i = 0; i < 20 && !errors.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(errors.length, 1);
+    assert.equal(BC.test.state.windowStart, null);
+
+    // The same from an empty week, which shows no items.
+    fail = false; BC.api.plannerItems = async () => { if (fail) throw Object.assign(Error("Canvas API 503"), { status: 503 }); return []; };
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    assert.equal(BC.test.state.items.length, 0);
+    fail = true;
+    BC.test.go(1);
+    for (let i = 0; i < 20 && errors.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(errors.length, 2);
+    assert.equal(BC.test.state.windowStart, null);
+  } finally { page.dom.window.close(); }
+});
+
+test("Tab from the workspace's last usable control wraps past switched-off rows", async () => {
+  const { domContext, load: loadDom, settingsUIFiles, settle } = require("./audit-helpers.cjs");
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+  const lazy = settingsUIFiles();
+  const page = domContext('<ul id="menu"></ul>', { matchMedia: () => ({ matches: true, addEventListener() {} }), chrome: {
+    runtime: { id: "t", getURL: (s) => s, sendMessage(msg, cb) { setTimeout(() => { loadDom(page.context, ...lazy); cb({ ok: true }); }); } },
+    storage: { local: { get() {} }, onChanged: { addListener() {} } } } });
+  try {
+    loadDom(page.context, ...manifest.content_scripts[0].js.filter((f) => f !== "src/content/content.js"));
+    const BC = page.context.BC, win = page.dom.window, doc = win.document;
+    win.Element.prototype.getClientRects = function () { return [{}]; };   // jsdom has no layout
+    BC.features.settingsPanel.open();
+    await new Promise((r) => setTimeout(r, 20)); await settle();
+    const shadow = doc.getElementById("bc-drawer").shadowRoot, root = shadow.querySelector(".root");
+    const usable = root.appendChild(doc.createElement("button")), off = root.appendChild(doc.createElement("div"));
+    off.setAttribute("inert", ""); off.appendChild(doc.createElement("button"));
+    usable.focus();
+    const tab = new win.KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true, cancelable: true });
+    usable.dispatchEvent(tab);
+    assert.equal(tab.defaultPrevented, true);
+    assert.notEqual(shadow.activeElement, usable);
+  } finally { page.dom.window.close(); }
+});
+
+test("a text or colour field drops its warning once it shows the saved value again", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="root"></div>');
+  try {
+    loadDom(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/color.js", "src/content/core/ui.js", "src/shared/settings/components.js");
+    const C = context.BC.SettingsComponents, doc = dom.window.document;
+    let font = "Inter", colour = "#336699";
+    const text = C.text({ get: () => font, set: (v) => { font = v; }, validate: (v) => (v.split('"').length % 2 ? true : "Close any quotes.") });
+    const pick = C.color({ get: () => colour, set: (v) => { colour = v; } });
+    doc.getElementById("root").append(text, pick);
+    const typeInto = (input, value) => { input.value = value; input.dispatchEvent(new dom.window.Event("input", { bubbles: true })); };
+    typeInto(text.querySelector("input"), 'Inter, "Open');
+    typeInto(pick.querySelector(".bcs-color__hex"), "#zz");
+    assert.equal(text.classList.contains("bcs-invalid") && pick.classList.contains("bcs-invalid"), true);
+    C.bindings.sync({});
+    assert.equal(text.querySelector("input").value, "Inter");
+    assert.equal(text.classList.contains("bcs-invalid"), false);
+    assert.equal(text.querySelector(".bcs-text__warn").textContent, "");
+    assert.equal(pick.querySelector(".bcs-color__hex").value, "#336699");
+    assert.equal(pick.classList.contains("bcs-invalid"), false);
+  } finally { dom.window.close(); }
+});
+
+test("dark mode lightens dark text on a see-through mid-tone background instead of pinning it", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<style>body { color: rgb(230, 230, 235); }</style>' +
+    '<div id="content"><div id="glass" style="background-color: rgba(199, 205, 209, 0.5); color: rgb(45, 59, 69)">Due <span id="inner" style="color: rgb(45, 59, 69)">Friday</span></div>' +
+    '<div id="solid" style="background-color: rgb(255, 217, 102); color: rgb(45, 59, 69)">chip</div>' +
+    '<div id="frosted" style="background-color: rgba(199, 205, 209, 0.85); color: rgb(45, 59, 69)">mostly <span id="frostedLight" style="color: rgb(230, 230, 235)">covers</span></div></div>');
+  try {
+    loadDom(context, "src/content/core/darkengine.js");
+    dom.window.document.documentElement.classList.add("bc-dark");
+    context.BC.darkEngine.start();
+    const tag = (id) => dom.window.document.getElementById(id).getAttribute("data-bc-dfg");
+    assert.equal(tag("glass"), "t");
+    assert.equal(tag("inner"), "t");
+    assert.equal(tag("solid"), "k", "a solid mid-tone chip still pins dark text");
+    assert.equal(tag("frosted"), "k", "mostly opaque, the grey still shows light, so its dark text stays");
+    assert.equal(tag("frostedLight"), "k");
+    context.BC.darkEngine.stop();
+  } finally { dom.window.close(); }
+});
+
+test("dark mode reads a see-through colour over a cell it leaves light by that cell, not the page", () => {
+  const { domContext, load: loadDom } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<style>body { color: rgb(230, 230, 235); }</style>' +
+    '<div id="content"><div id="cell" style="background-color: rgb(255, 217, 102); color: rgb(45, 59, 69)">' +
+    '<div id="wash" style="background-color: rgba(199, 205, 209, 0.5); color: rgb(45, 59, 69)">Due <span id="washLight" style="color: rgb(230, 230, 235)">Friday</span></div></div>' +
+    '<div id="glass" style="background-color: rgba(199, 205, 209, 0.5); color: rgb(45, 59, 69)">page</div></div>');
+  try {
+    loadDom(context, "src/content/core/darkengine.js");
+    dom.window.document.documentElement.classList.add("bc-dark");
+    context.BC.darkEngine.start();
+    const tag = (id) => dom.window.document.getElementById(id).getAttribute("data-bc-dfg");
+    assert.equal(tag("cell"), "k");
+    assert.equal(tag("wash"), "k", "grey over yellow still shows light, so its dark text stays");
+    assert.equal(tag("washLight"), "k");
+    assert.equal(tag("glass"), "t", "the same grey over the dark page still gets light text");
+    context.BC.darkEngine.stop();
+  } finally { dom.window.close(); }
+});
+
+test("a planner row drawn before another tab's override uses the override the last fetch brought", async () => {
+  const { BC, page } = await plannerContext("2026-11-06T10:00:00");
+  try {
+    let override = null;
+    const calls = [];
+    BC.api = { TTL: { planner: 30000 }, dashboardCards: async () => [], plannerItemDone: () => false,
+      plannerItems: async () => [{ plannable_type: "assignment", plannable_id: 7, plannable: { id: 7, title: "HW 6" }, plannable_date: new Date(2026, 10, 6, 23, 59).toISOString(), planner_override: override }],
+      setPlannerComplete: async (...args) => { calls.push(args); return { id: 50 }; } };
+    const s = BC.storage.current;
+    await BC.test.fetchWindow(s, true);
+    const drawn = BC.test.state.items[0];
+    override = { id: 50, marked_complete: false, dismissed: true };
+    BC.test.state.fetchedAt = 0;
+    await BC.test.fetchWindow(s, true);
+    await BC.test.setComplete(drawn, true);
+    assert.deepEqual(copy(calls), [["assignment", 7, true, 50, true]]);
+  } finally { page.dom.window.close(); }
 });

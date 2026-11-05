@@ -28,10 +28,13 @@
       // when we are actually no longer last. An unconditional appendChild is a
       // remove+insert per DOM spec, which invalidates the CSSOM and forces a
       // full-document style recalc; with ~20 keyed sheets per applyAll that was
-      // the single largest source of idle jank.
+      // the single largest source of idle jank. All of them move together, in the
+      // order they were made: moving one at a time past a stylesheet Canvas added
+      // later reversed them, so the static defaults ended up after the user's
+      // theme and won.
       const h = host();
-      const next = tag.nextElementSibling;
-      if (tag.parentNode !== h || (next && !next.hasAttribute("data-better-canvas"))) h.appendChild(tag);
+      const last = h.lastElementChild;
+      if (tag.parentNode !== h || (last && !last.hasAttribute("data-better-canvas"))) for (const t of tags.values()) h.appendChild(t);
     },
 
     removeStyle(key) {

@@ -102,3 +102,46 @@ test("modules too big for Canvas to inline fetch their items separately", async 
     assert.deepEqual(paths.slice(1), ["/api/v1/courses/7/modules/2/items?per_page=100"]);
   } finally { dom.window.close(); }
 });
+
+
+
+test("changing a planner override keeps Canvas's dismissed flag", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const BC = context.BC, bodies = [];
+    BC.api.mutate = async (method, path, body) => { bodies.push([method, path, body]); return { id: 5 }; };
+    await BC.api.setPlannerComplete("assignment", 1, true, 5, true);
+    await BC.api.setPlannerComplete("assignment", 1, false, 5, false);
+    assert.deepEqual(JSON.parse(JSON.stringify(bodies)), [
+      ["PUT", "/api/v1/planner/overrides/5", { marked_complete: true, dismissed: true }],
+      ["PUT", "/api/v1/planner/overrides/5", { marked_complete: false, dismissed: false }],
+    ]);
+  } finally { dom.window.close(); }
+});
+
+
+test("course files come newest first, so the page limit keeps recent uploads", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const urls = [];
+    context.BC.api.getList = async (url) => { urls.push(url); return []; };
+    await context.BC.api.courseFiles(9, 3);
+    assert.match(urls[0], /^\/api\/v1\/courses\/9\/files\?sort=updated_at&order=desc&/);
+  } finally { dom.window.close(); }
+});
+
+
+test("dashboard cards take the student's course colours, which Canvas leaves off the cards", async () => {
+  const { dom, context } = domContext();
+  try {
+    load(context, "src/content/core/api.js");
+    const api = context.BC.api;
+    let colors = async () => ({ custom_colors: { course_9: "#3b7ea1", user_1: "#000000" } });
+    api.getJSON = (url) => url.endsWith("/colors") ? colors() : Promise.resolve([{ id: "9", color: null }, { id: "10", color: null }, { id: "11", color: "#ff8800" }]);
+    assert.deepEqual(JSON.parse(JSON.stringify(await api.dashboardCards())), [{ id: "9", color: "#3b7ea1" }, { id: "10", color: null }, { id: "11", color: "#ff8800" }]);
+    colors = async () => { throw Error("Canvas API 500"); };
+    assert.equal((await api.dashboardCards()).length, 3);
+  } finally { dom.window.close(); }
+});

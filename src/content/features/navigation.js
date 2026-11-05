@@ -72,9 +72,12 @@
     }
     return text.replace(/\s+/g, " ").trim();
   }
+  // Groups, the Account menu and admin pages use #section-tabs too. Course menu
+  // settings only mean course menus.
+  const inCourse = () => !!BC.util.courseIdFromHref(location.pathname);
   BC.readCourseNav = function () {
     const list = document.querySelector("#section-tabs");
-    if (!list) return [];
+    if (!list || !inCourse()) return [];
     return [...list.querySelectorAll(":scope > li")].map(tabLabel).filter(Boolean);
   };
 
@@ -229,7 +232,7 @@
   function apply(settings) {
     const nav = settings.navigation || {};
     if (nav.global) applyGlobalNav(nav.global);
-    if (nav.course) applyCourseNav(nav.course);
+    if (nav.course && inCourse()) applyCourseNav(nav.course);
     applyBreadcrumbs(nav.breadcrumbs || "default");
     applyCourseTabs(settings);
     BC.util.guard(snapshot, "nav snapshot");

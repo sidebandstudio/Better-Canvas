@@ -103,7 +103,7 @@
         if (!isOpen) return;
         if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); close(); return; }
         if (e.key !== "Tab" || !e.composedPath().includes(drawerHost)) return;
-        const nodes = [...shadow.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]')].filter((n) => n.getClientRects().length && n.tabIndex >= 0);
+        const nodes = [...shadow.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]')].filter((n) => n.getClientRects().length && n.tabIndex >= 0 && !n.closest("[inert]"));
         const first = nodes[0], last = nodes[nodes.length - 1];
         if (e.shiftKey && shadow.activeElement === first) { e.preventDefault(); last?.focus(); }
         else if (!e.shiftKey && shadow.activeElement === last) { e.preventDefault(); first?.focus(); }

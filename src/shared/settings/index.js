@@ -210,10 +210,12 @@
       }
 
       // `still` skips the entrance animation, for rebuilds the user didn't ask for
-      // (undo, reset, a change made in another tab).
+      // (undo, reset, a change made in another tab). Reduce motion skips it too: the
+      // page's data-bc-motion rule can't reach inside the drawer, and the options
+      // page never sets it.
       function showTab(id, still) {
         const tab = TABS.find((t) => t.id === id) || TABS[0];
-        main.classList.toggle("bcs-main--still", !!still);
+        main.classList.toggle("bcs-main--still", !!still || !!(store.get().theming || {}).reducedMotion);
         active = lastTab = tab.id;
         cancelDraft();
         const editing = EDIT_TABS.includes(active);
@@ -928,9 +930,14 @@
       results.replaceChildren(ordered.length ? S().sortable({
         items: ordered,
         render: (c) => renderCourseRow(store, c),
+        // Filtered, the list holds only some courses. Their new order goes back
+        // into the places they had, so the others don't drop below them.
         onChange: (ids) => store.set((x) => {
-          const rest = (x.dashboard.courseOrder || []).filter((id) => !ids.includes(id));
-          x.dashboard.courseOrder = ids.concat(rest);
+          const full = (x.dashboard.courseOrder || []).slice();
+          for (const c of courses) if (!full.includes(c.id)) full.push(c.id);
+          const moved = new Set(ids);
+          let i = 0;
+          x.dashboard.courseOrder = full.map((id) => (moved.has(id) ? ids[i++] : id));
         }),
       }) : BC.ui.empty("No courses match."));
     }

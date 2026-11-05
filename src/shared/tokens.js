@@ -139,7 +139,11 @@
     // we've committed not to do. contrastText picks the better endpoint and
     // ensureContrast can only improve on it, so this is always the best achievable.
     const accentContrast = C.ensureContrast(C.contrastText(accent), accent, AA_TEXT);
-    const accentText = C.ensureContrast(accent, S2, AA_TEXT);
+    // Links sit on all three surfaces, like body text. A mid-grey custom background
+    // can need light links on the page and dark ones on white panels; then panels
+    // win, since most links are on them.
+    const linkAll = guardOn(accent, AA_TEXT, [S2, S1, S3]);
+    const accentText = C.contrastRatio(linkAll, S2) >= AA_TEXT ? linkAll : C.ensureContrast(accent, S2, AA_TEXT);
     const accentStroke = C.ensureContrast(accent, S2, AA_NONTEXT);
     const dark = mode === "dark";
 

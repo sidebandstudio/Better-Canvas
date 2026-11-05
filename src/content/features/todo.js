@@ -1052,7 +1052,7 @@
     }
     state.slide = dir || (state.slide || 0);
     state.lastFetchKey = "";
-    loadAndRender(s, true);
+    loadAndRender(s, true, true);
   }
 
   // ---- list view ------------------------------------------------------------
@@ -1272,14 +1272,20 @@
         return noteDone(keyForItem(it), complete).catch(() => {});
       }).then(() => true).catch(() => false);
     }
-    const override = it.planner_override && it.planner_override.id;
-    return BC.api.setPlannerComplete(it.plannable_type, (it.plannable && it.plannable.id) || it.plannable_id, complete, override)
+    // The row may hold an old copy. Another tab may have made an override since,
+    // so its id and dismissed flag come from the copy the last fetch brought.
+    const cur = state.canvasItems.find((x) => keyForItem(x) === keyForItem(it)) || it;
+    const o = cur.planner_override || it.planner_override || {};
+    return BC.api.setPlannerComplete(it.plannable_type, (it.plannable && it.plannable.id) || it.plannable_id, complete, o.id, o.dismissed)
       .then((saved) => {
         // Keep the id Canvas assigned, or the next toggle POSTs a second override
         // for the same item, which Canvas rejects.
         it.planner_override = Object.assign({}, it.planner_override,
           saved && saved.id != null ? { id: saved.id } : null, { marked_complete: complete });
         state.localDone.set(keyForItem(it), { complete, id: it.planner_override.id, at: Date.now() });
+        // A refetch since this row was drawn left it holding an old copy of the
+        // item. The next render reads the fresh one, so that gets the change too.
+        overlayLocal(state.canvasItems);
         // Record only on success, so a failed write can't inflate the streak.
         return noteDone(keyForItem(it), complete).catch(() => {});
       })
@@ -1375,16 +1381,26 @@
   function deleteTask(it) {
     const keep = { title: itemTitle(it), todoDate: it.plannable_date, courseId: courseIdOf(it) || undefined,
       details: (it.plannable && it.plannable.details) || undefined };
+    const from = keyForItem(it);
     BC.api.deletePlannerNote(noteId(it)).then(() => {
-      state.canvasItems = state.canvasItems.filter((x) => x !== it);
+      state.canvasItems = state.canvasItems.filter((x) => keyForItem(x) !== from);
       state.lastFetchKey = "";
       state.fetchSeq++;
       state.fetchKey = "";
       state.fetchPromise = null;
       rerender(true);
       // Undo re-creates it: Canvas has no restore, so it comes back as a new task.
+      // Its steps, note, tags and the rest move to the new task's key.
       BC.toast.info("Task deleted", { title: keep.title, timeout: 7000, actions: [{ label: "Undo", onClick: () => {
-        BC.api.createPlannerNote(keep).then(() => { state.lastFetchKey = ""; loadAndRender(BC.storage.current, true); })
+        BC.api.createPlannerNote(keep).then((saved) => {
+          const to = saved && saved.id != null ? "planner_note:" + saved.id : null;
+          return to && writeTodoLocal((L) => {
+            for (const name of ["stars", "subtasks", "notes", "tagsByItem", "priorities", "estimates", "scheduled", "status", "snoozed"]) {
+              const m = L[name];
+              if (m && Object.hasOwn(m, from)) { m[to] = m[from]; delete m[from]; }
+            }
+          }).catch(() => {});
+        }).then(() => { state.lastFetchKey = ""; loadAndRender(BC.storage.current, true); })
           .catch((e) => BC.toast.error("Couldn't restore it: " + e.message));
       } }] });
     }).catch((e) => BC.toast.error("Couldn't delete the task: " + e.message));
@@ -1957,7 +1973,7 @@
     return m;
   }
 
-  function loadAndRender(settings, force) {
+  function loadAndRender(settings, force, paging) {
     if (!mounted || !mounted.host.isConnected) return;
     if (!state.filterLoaded) {
       state.filterLoaded = true;
@@ -1972,7 +1988,18 @@
     loadCards();
     fetchWindow(settings, force).then(() => rerender(force)).catch((e) => {
       BC.util.warn("planner", e);
-      if (state.items.length) { rerender(force); return; }
+      // An empty week on screen still counts as shown.
+      if (state.items.length || (paging && state.range)) {
+        // A page change that failed stays on the dates still shown, so the header
+        // and the next step match the list.
+        if (paging && state.range) {
+          const shown = state.range.start;
+          state.windowStart = +shown === +defaultStart(settings.todo) ? null : shown.toISOString();
+          BC.toast.error("Couldn't load those dates. Try again in a moment.");
+        }
+        rerender(force);
+        return;
+      }
       body.dataset.bcSig = "";
       body.replaceChildren(el("div", { class: "pl" }, [
         el("div", { class: "pl-head" }, [el("div", { class: "pl-titles" }, [el("h2", { class: "pl-title", text: "To Do" })])]),
