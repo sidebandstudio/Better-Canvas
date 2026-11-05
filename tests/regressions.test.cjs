@@ -374,3 +374,28 @@ test("pages under /dashboard/ such as ePortfolios are not the dashboard", () => 
     } finally { dom.window.close(); }
   }
 });
+
+
+test("the People page tool bar follows the roster and attendance switches", async () => {
+  const { load, domContext, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="content"><table><tr id="user_1"><td>Sam</td></tr></table></div>');
+  dom.reconfigure({ url: "http://bc-test.instructure.com/courses/9/users" });
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/datetime.js", "src/content/core/lifecycle.js", "src/content/core/injector.js");
+    const BC = context.BC;
+    BC.diag = { push() {} };
+    BC.storage = { local: {} };
+    BC.api = { course: async () => ({ enrollments: [{ type: "teacher" }] }) };
+    load(context, "src/content/features/instructor.js");
+    const settings = BC.cloneDefaults(), ctx = { page: "course", courseId: "9", path: "/courses/9/users" };
+    Object.assign(settings.instructor, { rosterExport: true, attendanceQuick: false, bulkGradeHelpers: false });
+    const run = () => BC.registry.get("instructor").apply(settings, ctx);
+    run(); await settle(); run();
+    const buttons = () => [...dom.window.document.querySelectorAll(".bc-instr-bar button")].map((b) => b.textContent);
+    assert.deepEqual(buttons(), ["Export roster (CSV)"]);
+    settings.instructor.attendanceQuick = true; run();
+    assert.deepEqual(buttons(), ["Export roster (CSV)", "Export attendance (CSV)"]);
+    settings.instructor.rosterExport = false; run();
+    assert.deepEqual(buttons(), ["Export attendance (CSV)"]);
+  } finally { dom.window.close(); }
+});
