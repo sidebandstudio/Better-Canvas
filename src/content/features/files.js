@@ -37,6 +37,9 @@
         const files = await BC.api.courseFiles(c.id, 3);
         for (const f of files) all.push({ ...f, courseName: c.name, courseId: c.id });
       } catch (e) {
+        // A teacher who hides the Files tab keeps students out of its files. That
+        // is the course's choice, not a failure to report.
+        if (e.status === 401 || e.status === 403) return;
         failed++;
         BC.diag.push("files:" + c.id, e);   // was swallowed entirely
       }

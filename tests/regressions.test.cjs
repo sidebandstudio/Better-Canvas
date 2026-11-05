@@ -338,3 +338,26 @@ test("course menu settings leave group and Account menus alone", () => {
     } finally { dom.window.close(); }
   }
 });
+
+
+test("the file library leaves out courses that hide Files instead of calling them failures", async () => {
+  const { load, domContext, settle } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext('<div id="wrap"><div id="dashboard"></div></div>');
+  try {
+    load(context, "src/shared/defaults.js", "src/content/core/util.js", "src/content/core/icons.js", "src/content/core/ui.js", "src/content/core/lifecycle.js", "src/content/core/injector.js");
+    const BC = context.BC;
+    BC.diag = { push() {} };
+    BC.api = {
+      coursesWithScores: async () => [{ id: 1, name: "Biology" }, { id: 2, name: "Modules only" }],
+      courseFiles: async (id) => { if (id === 2) throw Object.assign(Error("Canvas API 401"), { status: 401 }); return [{ id: 10, display_name: "Lab 1.pdf", updated_at: "2026-11-01T00:00:00Z" }]; },
+    };
+    load(context, "src/content/features/files.js");
+    const settings = BC.cloneDefaults();
+    settings.files.enabled = true;
+    BC.registry.get("files").apply(settings, { page: "dashboard" });
+    for (let i = 0; i < 5; i++) await settle();
+    const text = dom.window.document.querySelector(".bc-files-panel").textContent;
+    assert.match(text, /Lab 1\.pdf/);
+    assert.doesNotMatch(text, /couldn't load/i);
+  } finally { dom.window.close(); }
+});
