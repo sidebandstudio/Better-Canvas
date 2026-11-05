@@ -299,3 +299,20 @@ test("focus returns into a shadow root after a dialog, and palette clicks keep f
     assert.equal(down.defaultPrevented, true);
   } finally { dom.window.close(); }
 });
+
+
+
+test("our style tags keep their order after Canvas adds a stylesheet at the end of head", () => {
+  const { load, domContext } = require("./audit-helpers.cjs");
+  const { dom, context } = domContext("<head></head><body></body>");
+  try {
+    load(context, "src/content/core/injector.js");
+    const doc = dom.window.document, keys = ["bc-static", "bc-theming", "bc-bg", "bc-custom-css", "bc-experience"];
+    const applyAll = () => keys.forEach((k) => context.BC.injector.setStyle(k, "/* " + k + " */"));
+    applyAll();
+    doc.head.appendChild(doc.createElement("style")).setAttribute("data-emotion", "css");
+    for (let i = 0; i < 5; i++) applyAll();
+    const order = [...doc.head.children].map((n) => n.getAttribute("data-better-canvas") || "canvas");
+    assert.deepEqual(order, ["canvas", ...keys]);
+  } finally { dom.window.close(); }
+});
