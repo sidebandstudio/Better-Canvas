@@ -1047,3 +1047,27 @@ test("a planner page change that fails stays on the week still shown and says so
     assert.equal(BC.test.state.windowStart, null);
   } finally { page.dom.window.close(); }
 });
+
+test("Tab from the workspace's last usable control wraps past switched-off rows", async () => {
+  const { domContext, load: loadDom, settingsUIFiles, settle } = require("./audit-helpers.cjs");
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
+  const lazy = settingsUIFiles();
+  const page = domContext('<ul id="menu"></ul>', { matchMedia: () => ({ matches: true, addEventListener() {} }), chrome: {
+    runtime: { id: "t", getURL: (s) => s, sendMessage(msg, cb) { setTimeout(() => { loadDom(page.context, ...lazy); cb({ ok: true }); }); } },
+    storage: { local: { get() {} }, onChanged: { addListener() {} } } } });
+  try {
+    loadDom(page.context, ...manifest.content_scripts[0].js.filter((f) => f !== "src/content/content.js"));
+    const BC = page.context.BC, win = page.dom.window, doc = win.document;
+    win.Element.prototype.getClientRects = function () { return [{}]; };   // jsdom has no layout
+    BC.features.settingsPanel.open();
+    await new Promise((r) => setTimeout(r, 20)); await settle();
+    const shadow = doc.getElementById("bc-drawer").shadowRoot, root = shadow.querySelector(".root");
+    const usable = root.appendChild(doc.createElement("button")), off = root.appendChild(doc.createElement("div"));
+    off.setAttribute("inert", ""); off.appendChild(doc.createElement("button"));
+    usable.focus();
+    const tab = new win.KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true, cancelable: true });
+    usable.dispatchEvent(tab);
+    assert.equal(tab.defaultPrevented, true);
+    assert.notEqual(shadow.activeElement, usable);
+  } finally { page.dom.window.close(); }
+});
